@@ -606,6 +606,24 @@ where
                         }
                     }
                 }
+
+                if let Some(on_drag) = &self.on_drag {
+                    if let Some((pane, origin)) = action.picked_pane() {
+                        if let Some(cursor_position) = cursor.position() {
+                            let offset = if cursor_position.distance(origin)
+                                > DRAG_DEADBAND_DISTANCE
+                            {
+                                cursor_position - origin
+                            } else {
+                                Vector::new(0.0, 0.0)
+                            };
+                            shell.publish(on_drag(DragEvent::Moved {
+                                pane,
+                                offset,
+                            }))
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -1121,6 +1139,16 @@ pub enum DragEvent {
     Picked {
         /// The picked [`Pane`].
         pane: Pane,
+    },
+
+    /// A [`Pane`] was moved while being dragged.
+    Moved {
+        /// The picked [`Pane`].
+        pane: Pane,
+
+        /// The offset [`Vector`] how much the picked [`Pane`] was moved
+        /// from its origin.
+        offset: Vector,
     },
 
     /// A [`Pane`] was dropped on top of another [`Pane`].
