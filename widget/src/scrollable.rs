@@ -37,8 +37,8 @@ use crate::core::{
     Length, Padding, Pixels, Point, Rectangle, Shell, Size, Theme, Vector,
     Widget,
 };
-use crate::runtime::task::{self, Task};
 use crate::runtime::Action;
+use crate::runtime::task::{self, Task};
 
 pub use operation::scrollable::{AbsoluteOffset, RelativeOffset};
 
@@ -729,7 +729,7 @@ where
                     _ => mouse::Cursor::Unavailable,
                 };
 
-                let had_input_method = shell.input_method().is_open();
+                let had_input_method = shell.input_method().is_enabled();
 
                 let translation =
                     state.translation(self.direction, bounds, content_bounds);
@@ -750,10 +750,10 @@ where
                 );
 
                 if !had_input_method {
-                    if let InputMethod::Open { position, .. } =
+                    if let InputMethod::Enabled { position, .. } =
                         shell.input_method_mut()
                     {
-                        *position = *position + translation;
+                        *position = *position - translation;
                     }
                 }
             };

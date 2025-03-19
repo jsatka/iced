@@ -9,7 +9,7 @@ use iced::time::{self, milliseconds};
 use iced::widget::{
     button, checkbox, column, container, pick_list, row, slider, text,
 };
-use iced::{Center, Element, Fill, Subscription, Task, Theme};
+use iced::{Center, Element, Fill, Function, Subscription, Task, Theme};
 
 pub fn main() -> iced::Result {
     tracing_subscriber::fmt::init();
@@ -37,7 +37,7 @@ struct GameOfLife {
 
 #[derive(Debug, Clone)]
 enum Message {
-    Grid(grid::Message, usize),
+    Grid(usize, grid::Message),
     Tick,
     TogglePlayback,
     ToggleGrid(bool),
@@ -61,7 +61,7 @@ impl GameOfLife {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Grid(message, version) => {
+            Message::Grid(version, message) => {
                 if version == self.version {
                     self.grid.update(message);
                 }
@@ -78,9 +78,7 @@ impl GameOfLife {
 
                     let version = self.version;
 
-                    return Task::perform(task, move |message| {
-                        Message::Grid(message, version)
-                    });
+                    return Task::perform(task, Message::Grid.with(version));
                 }
             }
             Message::TogglePlayback => {
@@ -129,9 +127,7 @@ impl GameOfLife {
         );
 
         let content = column![
-            self.grid
-                .view()
-                .map(move |message| Message::Grid(message, version)),
+            self.grid.view().map(Message::Grid.with(version)),
             controls,
         ]
         .height(Fill);
@@ -200,7 +196,6 @@ mod grid {
         Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme, Vector,
     };
     use rustc_hash::{FxHashMap, FxHashSet};
-    use std::future::Future;
     use std::ops::RangeInclusive;
 
     pub struct Grid {
@@ -265,7 +260,7 @@ mod grid {
         pub fn tick(
             &mut self,
             amount: usize,
-        ) -> Option<impl Future<Output = Message>> {
+        ) -> Option<impl Future<Output = Message> + use<>> {
             let tick = self.state.tick(amount)?;
 
             self.last_queued_ticks = amount;
@@ -585,8 +580,8 @@ mod grid {
                     color: Color::WHITE,
                     size: 14.0.into(),
                     position: Point::new(frame.width(), frame.height()),
-                    horizontal_alignment: alignment::Horizontal::Right,
-                    vertical_alignment: alignment::Vertical::Bottom,
+                    align_x: alignment::Horizontal::Right,
+                    align_y: alignment::Vertical::Bottom,
                     ..Text::default()
                 };
 
@@ -726,7 +721,8 @@ mod grid {
         fn tick(
             &mut self,
             amount: usize,
-        ) -> Option<impl Future<Output = Result<Life, TickError>>> {
+        ) -> Option<impl Future<Output = Result<Life, TickError>> + use<>>
+        {
             if self.is_ticking {
                 return None;
             }

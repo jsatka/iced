@@ -5,16 +5,16 @@ use controls::Controls;
 use scene::Scene;
 
 use iced_wgpu::graphics::Viewport;
-use iced_wgpu::{wgpu, Engine, Renderer};
+use iced_wgpu::{Engine, Renderer, wgpu};
+use iced_winit::Clipboard;
 use iced_winit::conversion;
 use iced_winit::core::mouse;
 use iced_winit::core::renderer;
 use iced_winit::core::{Color, Font, Pixels, Size, Theme};
 use iced_winit::futures;
-use iced_winit::runtime::program;
 use iced_winit::runtime::Debug;
+use iced_winit::runtime::program;
 use iced_winit::winit;
-use iced_winit::Clipboard;
 
 use winit::{
     event::WindowEvent,
@@ -70,10 +70,9 @@ pub fn main() -> Result<(), winit::error::EventLoopError> {
                 );
                 let clipboard = Clipboard::connect(window.clone());
 
-                let backend =
-                    wgpu::util::backend_bits_from_env().unwrap_or_default();
+                let backend = wgpu::Backends::from_env().unwrap_or_default();
 
-                let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+                let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
                     backends: backend,
                     ..Default::default()
                 });

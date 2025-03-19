@@ -23,8 +23,8 @@ use crate::core::overlay;
 use crate::core::renderer;
 use crate::core::theme::palette;
 use crate::core::touch;
-use crate::core::widget::tree::{self, Tree};
 use crate::core::widget::Operation;
+use crate::core::widget::tree::{self, Tree};
 use crate::core::window;
 use crate::core::{
     Background, Clipboard, Color, Element, Event, Layout, Length, Padding,
@@ -591,12 +591,12 @@ impl Catalog for Theme {
 /// A primary button; denoting a main action.
 pub fn primary(theme: &Theme, status: Status) -> Style {
     let palette = theme.extended_palette();
-    let base = styled(palette.primary.strong);
+    let base = styled(palette.primary.base);
 
     match status {
         Status::Active | Status::Pressed => base,
         Status::Hovered => Style {
-            background: Some(Background::Color(palette.primary.base.color)),
+            background: Some(Background::Color(palette.primary.strong.color)),
             ..base
         },
         Status::Disabled => disabled(base),

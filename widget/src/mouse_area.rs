@@ -4,7 +4,7 @@ use crate::core::mouse;
 use crate::core::overlay;
 use crate::core::renderer;
 use crate::core::touch;
-use crate::core::widget::{tree, Operation, Tree};
+use crate::core::widget::{Operation, Tree, tree};
 use crate::core::{
     Clipboard, Element, Event, Layout, Length, Point, Rectangle, Shell, Size,
     Vector, Widget,
@@ -342,6 +342,10 @@ fn update<Message: Clone, Theme, Renderer>(
         state.is_hovered = cursor.is_over(layout.bounds());
         state.cursor_position = cursor_position;
         state.bounds = bounds;
+
+        if widget.interaction.is_some() && state.is_hovered != was_hovered {
+            shell.request_redraw();
+        }
 
         match (
             widget.on_enter.as_ref(),

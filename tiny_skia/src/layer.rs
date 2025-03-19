@@ -1,3 +1,4 @@
+use crate::Primitive;
 use crate::core::renderer::Quad;
 use crate::core::{
     self, Background, Color, Point, Rectangle, Svg, Transformation,
@@ -6,7 +7,6 @@ use crate::graphics::damage;
 use crate::graphics::layer;
 use crate::graphics::text::{Editor, Paragraph, Text};
 use crate::graphics::{self, Image};
-use crate::Primitive;
 
 use std::rc::Rc;
 
@@ -86,8 +86,8 @@ impl Layer {
             line_height: text.line_height.to_absolute(text.size)
                 * transformation.scale_factor(),
             font: text.font,
-            horizontal_alignment: text.horizontal_alignment,
-            vertical_alignment: text.vertical_alignment,
+            align_x: text.align_x,
+            align_y: text.align_y,
             shaping: text.shaping,
             clip_bounds: clip_bounds * transformation,
         };

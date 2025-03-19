@@ -11,7 +11,7 @@ use cosmic_text::Edit as _;
 
 use std::borrow::Cow;
 use std::fmt;
-use std::sync::{self, Arc};
+use std::sync::{self, Arc, RwLock};
 
 /// A multi-line text editor.
 #[derive(Debug, PartialEq)]
@@ -19,6 +19,7 @@ pub struct Editor(Option<Arc<Internal>>);
 
 struct Internal {
     editor: cosmic_text::Editor<'static>,
+    cursor: RwLock<Option<Cursor>>,
     font: Font,
     bounds: Size,
     topmost_line_changed: Option<usize>,
@@ -114,10 +115,14 @@ impl editor::Editor for Editor {
     fn cursor(&self) -> editor::Cursor {
         let internal = self.internal();
 
+        if let Ok(Some(cursor)) = internal.cursor.read().as_deref() {
+            return cursor.clone();
+        }
+
         let cursor = internal.editor.cursor();
         let buffer = buffer_from_editor(&internal.editor);
 
-        match internal.editor.selection_bounds() {
+        let cursor = match internal.editor.selection_bounds() {
             Some((start, end)) => {
                 let line_height = buffer.metrics().line_height;
                 let selected_lines = end.line - start.line + 1;
@@ -173,10 +178,8 @@ impl editor::Editor for Editor {
                     .get(cursor.line)
                     .expect("Cursor line should be present");
 
-                let layout = line
-                    .layout_opt()
-                    .as_ref()
-                    .expect("Line layout should be cached");
+                let layout =
+                    line.layout_opt().expect("Line layout should be cached");
 
                 let mut lines = layout.iter().enumerate();
 
@@ -237,7 +240,12 @@ impl editor::Editor for Editor {
                         - buffer.scroll().vertical,
                 ))
             }
-        }
+        };
+
+        *internal.cursor.write().expect("Write to cursor cache") =
+            Some(cursor.clone());
+
+        cursor
     }
 
     fn cursor_position(&self) -> (usize, usize) {
@@ -258,6 +266,13 @@ impl editor::Editor for Editor {
             .expect("Editor cannot have multiple strong references");
 
         let editor = &mut internal.editor;
+
+        // Clear cursor cache
+        let _ = internal
+            .cursor
+            .write()
+            .expect("Write to cursor cache")
+            .take();
 
         match action {
             // Motion events
@@ -435,7 +450,10 @@ impl editor::Editor for Editor {
     fn min_bounds(&self) -> Size {
         let internal = self.internal();
 
-        text::measure(buffer_from_editor(&internal.editor))
+        let (bounds, _has_rtl) =
+            text::measure(buffer_from_editor(&internal.editor));
+
+        bounds
     }
 
     fn update(
@@ -526,6 +544,13 @@ impl editor::Editor for Editor {
         }
 
         internal.editor.shape_as_needed(font_system.raw(), false);
+
+        // Clear cursor cache
+        let _ = internal
+            .cursor
+            .write()
+            .expect("Write to cursor cache")
+            .take();
 
         self.0 = Some(Arc::new(internal));
     }
@@ -635,6 +660,7 @@ impl Default for Internal {
                     line_height: 1.0,
                 },
             )),
+            cursor: RwLock::new(None),
             font: Font::default(),
             bounds: Size::ZERO,
             topmost_line_changed: None,
@@ -681,11 +707,7 @@ fn highlight_line(
     from: usize,
     to: usize,
 ) -> impl Iterator<Item = (f32, f32)> + '_ {
-    let layout = line
-        .layout_opt()
-        .as_ref()
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    let layout = line.layout_opt().map(Vec::as_slice).unwrap_or_default();
 
     layout.iter().map(move |visual_line| {
         let start = visual_line
@@ -736,9 +758,7 @@ fn visual_lines_offset(line: usize, buffer: &cosmic_text::Buffer) -> i32 {
     let visual_lines_offset: usize = buffer.lines[start..]
         .iter()
         .take(end - start)
-        .map(|line| {
-            line.layout_opt().as_ref().map(Vec::len).unwrap_or_default()
-        })
+        .map(|line| line.layout_opt().map(Vec::len).unwrap_or_default())
         .sum();
 
     visual_lines_offset as i32 * if scroll.line < line { 1 } else { -1 }

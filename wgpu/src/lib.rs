@@ -64,8 +64,8 @@ use crate::core::{
     Background, Color, Font, Pixels, Point, Rectangle, Size, Transformation,
     Vector,
 };
-use crate::graphics::text::{Editor, Paragraph};
 use crate::graphics::Viewport;
+use crate::graphics::text::{Editor, Paragraph};
 
 /// A [`wgpu`] graphics renderer for [`iced`].
 ///
@@ -280,10 +280,13 @@ impl Renderer {
         let scale = Transformation::scale(scale_factor);
 
         for layer in self.layers.iter() {
-            let Some(scissor_rect) = physical_bounds
-                .intersection(&(layer.bounds * scale_factor))
-                .and_then(Rectangle::snap)
+            let Some(physical_bounds) =
+                physical_bounds.intersection(&(layer.bounds * scale_factor))
             else {
+                continue;
+            };
+
+            let Some(scissor_rect) = physical_bounds.snap() else {
                 continue;
             };
 
@@ -400,9 +403,9 @@ impl Renderer {
         overlay: &[impl AsRef<str>],
         viewport: &Viewport,
     ) {
+        use crate::core::Renderer as _;
         use crate::core::alignment;
         use crate::core::text::Renderer as _;
-        use crate::core::Renderer as _;
 
         self.with_layer(
             Rectangle::with_size(viewport.logical_size()),
@@ -414,8 +417,8 @@ impl Renderer {
                         size: Pixels(20.0),
                         line_height: core::text::LineHeight::default(),
                         font: Font::MONOSPACE,
-                        horizontal_alignment: alignment::Horizontal::Left,
-                        vertical_alignment: alignment::Vertical::Top,
+                        align_x: core::text::Alignment::Default,
+                        align_y: alignment::Vertical::Top,
                         shaping: core::text::Shaping::Basic,
                         wrapping: core::text::Wrapping::Word,
                     };

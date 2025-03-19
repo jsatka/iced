@@ -1,9 +1,11 @@
+use iced::border;
+use iced::widget::{Button, Column, Container, Slider};
 use iced::widget::{
     button, center_x, center_y, checkbox, column, horizontal_space, image,
-    radio, row, scrollable, slider, text, text_input, toggler, vertical_space,
+    radio, rich_text, row, scrollable, slider, span, text, text_input, toggler,
+    vertical_space,
 };
-use iced::widget::{Button, Column, Container, Slider};
-use iced::{Center, Color, Element, Fill, Font, Pixels};
+use iced::{Center, Color, Element, Fill, Font, Pixels, Theme};
 
 pub fn main() -> iced::Result {
     #[cfg(target_arch = "wasm32")]
@@ -24,12 +26,12 @@ pub struct Tour {
     screen: Screen,
     slider: u8,
     layout: Layout,
-    spacing: u16,
-    text_size: u16,
+    spacing: u32,
+    text_size: u32,
     text_color: Color,
     language: Option<Language>,
     toggler: bool,
-    image_width: u16,
+    image_width: u32,
     image_filter_method: image::FilterMethod,
     input_value: String,
     input_is_secure: bool,
@@ -43,17 +45,18 @@ pub enum Message {
     NextPressed,
     SliderChanged(u8),
     LayoutChanged(Layout),
-    SpacingChanged(u16),
-    TextSizeChanged(u16),
+    SpacingChanged(u32),
+    TextSizeChanged(u32),
     TextColorChanged(Color),
     LanguageSelected(Language),
-    ImageWidthChanged(u16),
+    ImageWidthChanged(u32),
     ImageUseNearestToggled(bool),
     InputChanged(String),
     ToggleSecureInput(bool),
     ToggleTextInputIcon(bool),
     DebugToggled(bool),
     TogglerChanged(bool),
+    OpenTrunk,
 }
 
 impl Tour {
@@ -130,6 +133,10 @@ impl Tour {
             Message::TogglerChanged(toggler) => {
                 self.toggler = toggler;
             }
+            Message::OpenTrunk => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = open::that_in_background("https://trunkrs.dev");
+            }
         }
     }
 
@@ -194,8 +201,8 @@ impl Tour {
     fn welcome(&self) -> Column<Message> {
         Self::container("Welcome!")
             .push(
-                "This is a simple tour meant to showcase a bunch of widgets \
-                 that can be easily implemented on top of Iced.",
+                "This is a simple tour meant to showcase a bunch of \
+                widgets that can be easily implemented on top of Iced.",
             )
             .push(
                 "Iced is a cross-platform GUI library for Rust focused on \
@@ -210,13 +217,31 @@ impl Tour {
                  built on top of wgpu, a graphics library supporting Vulkan, \
                  Metal, DX11, and DX12.",
             )
+            .push({
+                let theme = Theme::default();
+                let palette = theme.extended_palette();
+
+                rich_text![
+                    "Additionally, this tour can also run on WebAssembly ",
+                    "by leveraging ",
+                    span("trunk")
+                        .color(palette.primary.base.color)
+                        .background(palette.background.weakest.color)
+                        .border(
+                            border::rounded(2)
+                                .width(1)
+                                .color(palette.background.weak.color)
+                        )
+                        .padding([0, 2])
+                        .font(Font::MONOSPACE)
+                        .link(Message::OpenTrunk),
+                    "."
+                ]
+                .on_link_click(std::convert::identity)
+            })
             .push(
-                "Additionally, this tour can also run on WebAssembly thanks \
-                 to dodrio, an experimental VDOM library for Rust.",
-            )
-            .push(
-                "You will need to interact with the UI in order to reach the \
-                 end!",
+                "You will need to interact with the UI in order to reach \
+                 the end!",
             )
     }
 
@@ -537,7 +562,7 @@ impl Screen {
 }
 
 fn ferris<'a>(
-    width: u16,
+    width: u32,
     filter_method: image::FilterMethod,
 ) -> Container<'a, Message> {
     center_x(

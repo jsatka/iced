@@ -1,3 +1,4 @@
+use crate::Primitive;
 use crate::core::text::LineHeight;
 use crate::core::{self, Pixels, Point, Radians, Rectangle, Size, Svg, Vector};
 use crate::graphics::cache::{self, Cached};
@@ -5,7 +6,6 @@ use crate::graphics::geometry::fill::{self, Fill};
 use crate::graphics::geometry::stroke::{self, Stroke};
 use crate::graphics::geometry::{self, Path, Style};
 use crate::graphics::{self, Gradient, Image, Text};
-use crate::Primitive;
 
 use std::rc::Rc;
 
@@ -231,8 +231,8 @@ impl geometry::frame::Backend for Frame {
                 size,
                 line_height: line_height.to_absolute(size),
                 font: text.font,
-                horizontal_alignment: text.horizontal_alignment,
-                vertical_alignment: text.vertical_alignment,
+                align_x: text.align_x.into(),
+                align_y: text.align_y,
                 shaping: text.shaping,
                 clip_bounds: Rectangle::with_size(Size::INFINITY),
             });

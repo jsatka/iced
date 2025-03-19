@@ -1,12 +1,12 @@
 use iced::alignment;
 use iced::mouse;
 use iced::widget::canvas::{self, Canvas, Frame, Geometry, Path};
-use iced::widget::{column, row, text, Slider};
+use iced::widget::{Slider, column, row, text};
 use iced::{
     Center, Color, Element, Fill, Font, Pixels, Point, Rectangle, Renderer,
     Size, Vector,
 };
-use palette::{convert::FromColor, rgb::Rgb, Darken, Hsl, Lighten, ShiftHue};
+use palette::{Darken, Hsl, Lighten, ShiftHue, convert::FromColor, rgb::Rgb};
 use std::marker::PhantomData;
 use std::ops::RangeInclusive;
 
@@ -170,8 +170,8 @@ impl Theme {
         });
 
         let mut text = canvas::Text {
-            horizontal_alignment: alignment::Horizontal::Center,
-            vertical_alignment: alignment::Vertical::Top,
+            align_x: alignment::Horizontal::Center,
+            align_y: alignment::Vertical::Top,
             size: Pixels(15.0),
             color: text_color,
             ..canvas::Text::default()
@@ -214,7 +214,7 @@ impl Theme {
             });
         }
 
-        text.vertical_alignment = alignment::Vertical::Bottom;
+        text.align_y = alignment::Vertical::Bottom;
 
         let hsl = Hsl::from_color(Rgb::from(self.base));
         for i in 0..self.len() {

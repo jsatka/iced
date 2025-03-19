@@ -339,10 +339,6 @@ where
             return InputMethod::Disabled;
         };
 
-        let Some(preedit) = &state.preedit else {
-            return InputMethod::Allowed;
-        };
-
         let bounds = layout.bounds();
         let internal = self.content.0.borrow_mut();
 
@@ -363,10 +359,10 @@ where
         let position =
             cursor + translation + Vector::new(0.0, f32::from(line_height));
 
-        InputMethod::Open {
+        InputMethod::Enabled {
             position,
             purpose: input_method::Purpose::Normal,
-            preedit: Some(preedit.as_ref()),
+            preedit: state.preedit.as_ref().map(input_method::Preedit::as_ref),
         }
     }
 }
@@ -759,8 +755,11 @@ where
                         shell.request_redraw();
                     }
                     Ime::Preedit { content, selection } => {
-                        state.preedit =
-                            Some(input_method::Preedit { content, selection });
+                        state.preedit = Some(input_method::Preedit {
+                            content,
+                            selection,
+                            text_size: self.text_size,
+                        });
 
                         shell.request_redraw();
                     }
@@ -956,8 +955,8 @@ where
                             .unwrap_or_else(|| renderer.default_size()),
                         line_height: self.line_height,
                         font,
-                        horizontal_alignment: alignment::Horizontal::Left,
-                        vertical_alignment: alignment::Vertical::Top,
+                        align_x: text::Alignment::Default,
+                        align_y: alignment::Vertical::Top,
                         shaping: text::Shaping::Advanced,
                         wrapping: self.wrapping,
                     },

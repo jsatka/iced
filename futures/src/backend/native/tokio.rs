@@ -1,5 +1,4 @@
 //! A `tokio` backend.
-use futures::Future;
 
 /// A `tokio` executor.
 pub type Executor = tokio::runtime::Runtime;
@@ -22,13 +21,11 @@ impl crate::Executor for Executor {
 
 pub mod time {
     //! Listen and react to time.
-    use crate::core::time::{Duration, Instant};
-    use crate::stream;
-    use crate::subscription::Subscription;
     use crate::MaybeSend;
+    use crate::core::time::{Duration, Instant};
+    use crate::subscription::Subscription;
 
-    use futures::SinkExt;
-    use std::future::Future;
+    use futures::stream;
 
     /// Returns a [`Subscription`] that produces messages at a set interval.
     ///
@@ -66,12 +63,12 @@ pub mod time {
             let f = *f;
             let interval = *interval;
 
-            stream::channel(1, move |mut output| async move {
-                loop {
-                    let _ = output.send(f().await).await;
-
+            stream::unfold(0, move |i| async move {
+                if i > 0 {
                     tokio::time::sleep(interval).await;
                 }
+
+                Some((f().await, i + 1))
             })
         })
     }

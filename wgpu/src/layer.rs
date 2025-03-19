@@ -1,11 +1,11 @@
 use crate::core::{
-    self, renderer, Background, Color, Point, Rectangle, Svg, Transformation,
+    self, Background, Color, Point, Rectangle, Svg, Transformation, renderer,
 };
 use crate::graphics;
+use crate::graphics::Mesh;
 use crate::graphics::color;
 use crate::graphics::layer;
 use crate::graphics::text::{Editor, Paragraph};
-use crate::graphics::Mesh;
 use crate::image::{self, Image};
 use crate::primitive::{self, Primitive};
 use crate::quad::{self, Quad};
@@ -103,8 +103,8 @@ impl Layer {
             line_height: text.line_height.to_absolute(text.size)
                 * transformation.scale_factor(),
             font: text.font,
-            horizontal_alignment: text.horizontal_alignment,
-            vertical_alignment: text.vertical_alignment,
+            align_x: text.align_x,
+            align_y: text.align_y,
             shaping: text.shaping,
             clip_bounds: clip_bounds * transformation,
         };

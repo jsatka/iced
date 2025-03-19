@@ -1,6 +1,6 @@
+use crate::InputMethod;
 use crate::event;
 use crate::window;
-use crate::InputMethod;
 
 /// A connection to the state of a shell.
 ///
@@ -27,7 +27,7 @@ impl<'a, Message> Shell<'a, Message> {
             redraw_request: window::RedrawRequest::Wait,
             is_layout_invalid: false,
             are_widgets_invalid: false,
-            input_method: InputMethod::None,
+            input_method: InputMethod::Disabled,
         }
     }
 

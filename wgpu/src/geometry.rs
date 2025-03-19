@@ -336,8 +336,8 @@ impl geometry::frame::Backend for Frame {
                 size,
                 line_height: line_height.to_absolute(size),
                 font: text.font,
-                horizontal_alignment: text.horizontal_alignment,
-                vertical_alignment: text.vertical_alignment,
+                align_x: text.align_x.into(),
+                align_y: text.align_y,
                 shaping: text.shaping,
                 clip_bounds: self.clip_bounds,
             });
@@ -713,7 +713,7 @@ fn into_fill_rule(rule: fill::Rule) -> lyon::tessellation::FillRule {
 
 pub(super) fn dashed(path: &Path, line_dash: LineDash<'_>) -> Path {
     use lyon::algorithms::walk::{
-        walk_along_path, RepeatedPattern, WalkerEvent,
+        RepeatedPattern, WalkerEvent, walk_along_path,
     };
     use lyon::path::iterator::PathIterator;
 

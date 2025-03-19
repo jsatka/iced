@@ -161,7 +161,7 @@ impl<T> Subscription<T> {
     /// }
     ///
     /// fn some_worker() -> impl Stream<Item = Event> {
-    ///     stream::channel(100, |mut output| async move {
+    ///     stream::channel(100, async |mut output| {
     ///         // Create channel
     ///         let (sender, mut receiver) = mpsc::channel(100);
     ///
@@ -210,7 +210,8 @@ impl<T> Subscription<T> {
     /// Returns a [`Subscription`] that will create and asynchronously run the
     /// given [`Stream`].
     ///
-    /// The `id` will be used to uniquely identify the [`Subscription`].
+    /// Both the `data` and the function pointer will be used to uniquely identify
+    /// the [`Subscription`].
     pub fn run_with<D, S>(data: D, builder: fn(&D) -> S) -> Self
     where
         D: Hash + 'static,
