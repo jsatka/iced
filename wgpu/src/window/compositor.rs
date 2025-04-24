@@ -153,11 +153,6 @@ impl Compositor {
         let limits =
             [wgpu::Limits::default(), wgpu::Limits::downlevel_defaults()];
 
-        let limits = limits.into_iter().map(|limits| wgpu::Limits {
-            max_bind_groups: 2,
-            ..limits
-        });
-
         let mut errors = Vec::new();
 
         for required_limits in limits {
