@@ -1,3 +1,4 @@
+use crate::alignment;
 use crate::{Padding, Point, Radians, Size, Vector};
 
 /// An axis-aligned rectangle.
@@ -157,6 +158,30 @@ impl Rectangle<f32> {
         distance_x.hypot(distance_y)
     }
 
+    /// Computes the offset that must be applied to the [`Rectangle`] to be placed
+    /// inside the given `container`.
+    pub fn offset(&self, container: &Rectangle) -> Vector {
+        let Some(intersection) = self.intersection(container) else {
+            return Vector::ZERO;
+        };
+
+        let left = intersection.x - self.x;
+        let top = intersection.y - self.y;
+
+        Vector::new(
+            if left > 0.0 {
+                left
+            } else {
+                intersection.x + intersection.width - self.x - self.width
+            },
+            if top > 0.0 {
+                top
+            } else {
+                intersection.y + intersection.height - self.y - self.height
+            },
+        )
+    }
+
     /// Returns true if the current [`Rectangle`] is completely within the given
     /// `container`.
     pub fn is_within(&self, container: &Rectangle) -> bool {
@@ -267,6 +292,45 @@ impl Rectangle<f32> {
         );
 
         Self::new(position, size)
+    }
+
+    /// Scales the [`Rectangle`] without changing its position, effectively
+    /// "zooming" it.
+    pub fn zoom(self, zoom: f32) -> Self {
+        Self {
+            x: self.x - (self.width * (zoom - 1.0)) / 2.0,
+            y: self.y - (self.height * (zoom - 1.0)) / 2.0,
+            width: self.width * zoom,
+            height: self.height * zoom,
+        }
+    }
+
+    /// Returns the top-left position to render an object of the given [`Size`].
+    /// inside the [`Rectangle`] that is anchored to the edge or corner
+    /// defined by the alignment arguments.
+    pub fn anchor(
+        &self,
+        size: Size,
+        align_x: impl Into<alignment::Horizontal>,
+        align_y: impl Into<alignment::Vertical>,
+    ) -> Point {
+        let x = match align_x.into() {
+            alignment::Horizontal::Left => self.x,
+            alignment::Horizontal::Center => {
+                self.x + (self.width - size.width) / 2.0
+            }
+            alignment::Horizontal::Right => self.x + self.width - size.width,
+        };
+
+        let y = match align_y.into() {
+            alignment::Vertical::Top => self.y,
+            alignment::Vertical::Center => {
+                self.y + (self.height - size.height) / 2.0
+            }
+            alignment::Vertical::Bottom => self.y + self.height - size.height,
+        };
+
+        Point::new(x, y)
     }
 }
 

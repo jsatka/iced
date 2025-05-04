@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 pub enum Span {
     Boot,
     Update {
+        number: usize,
         message: String,
-        commands_spawned: usize,
+        tasks: usize,
+        subscriptions: usize,
     },
     View {
         window: window::Id,
@@ -31,6 +33,7 @@ pub enum Span {
     },
     Present {
         window: window::Id,
+        layers: usize,
     },
     Custom {
         name: String,
@@ -68,7 +71,7 @@ impl Span {
             Span::Draw { window } => Stage::Draw(*window),
             Span::Prepare { primitive, .. } => Stage::Prepare(*primitive),
             Span::Render { primitive, .. } => Stage::Render(*primitive),
-            Span::Present { window } => Stage::Present(*window),
+            Span::Present { window, .. } => Stage::Present(*window),
             Span::Custom { name, .. } => Stage::Custom(name.clone()),
         }
     }

@@ -54,7 +54,7 @@ pub fn viewer<Handle>(handle: Handle) -> Viewer<Handle> {
 /// }
 /// ```
 /// <img src="https://github.com/iced-rs/iced/blob/9712b319bb7a32848001b96bd84977430f14b623/examples/resources/ferris.png?raw=true" width="300">
-#[derive(Debug)]
+#[allow(missing_debug_implementations)]
 pub struct Image<Handle = image::Handle> {
     handle: Handle,
     width: Length,
@@ -174,26 +174,20 @@ where
     layout::Node::new(final_size)
 }
 
-/// Draws an [`Image`]
-pub fn draw<Renderer, Handle>(
-    renderer: &mut Renderer,
-    layout: Layout<'_>,
-    viewport: &Rectangle,
+fn drawing_bounds<Renderer, Handle>(
+    renderer: &Renderer,
+    bounds: Rectangle,
     handle: &Handle,
     content_fit: ContentFit,
-    filter_method: FilterMethod,
     rotation: Rotation,
-    opacity: f32,
     scale: f32,
-) where
+) -> Rectangle
+where
     Renderer: image::Renderer<Handle = Handle>,
-    Handle: Clone,
 {
     let Size { width, height } = renderer.measure_image(handle);
     let image_size = Size::new(width as f32, height as f32);
     let rotated_size = rotation.apply(image_size);
-
-    let bounds = layout.bounds();
     let adjusted_fit = content_fit.fit(rotated_size, bounds.size());
 
     let fit_scale = Vector::new(
@@ -214,29 +208,78 @@ pub fn draw<Renderer, Handle>(
         ),
     };
 
-    let drawing_bounds = Rectangle::new(position, final_size);
+    Rectangle::new(position, final_size)
+}
 
-    let render = |renderer: &mut Renderer| {
-        renderer.draw_image(
-            image::Image {
-                handle: handle.clone(),
-                filter_method,
-                rotation: rotation.radians(),
-                opacity,
-                snap: true,
-            },
-            drawing_bounds,
-        );
-    };
+fn must_clip(bounds: Rectangle, drawing_bounds: Rectangle) -> bool {
+    drawing_bounds.width > bounds.width || drawing_bounds.height > bounds.height
+}
 
-    if adjusted_fit.width > bounds.width || adjusted_fit.height > bounds.height
-    {
+/// Draws an [`Image`]
+pub fn draw<Renderer, Handle>(
+    renderer: &mut Renderer,
+    layout: Layout<'_>,
+    viewport: &Rectangle,
+    handle: &Handle,
+    content_fit: ContentFit,
+    filter_method: FilterMethod,
+    rotation: Rotation,
+    opacity: f32,
+    scale: f32,
+) where
+    Renderer: image::Renderer<Handle = Handle>,
+    Handle: Clone,
+{
+    let bounds = layout.bounds();
+    let drawing_bounds =
+        drawing_bounds(renderer, bounds, handle, content_fit, rotation, scale);
+
+    if must_clip(bounds, drawing_bounds) {
         if let Some(bounds) = bounds.intersection(viewport) {
-            renderer.with_layer(bounds, render);
+            renderer.with_layer(bounds, |renderer| {
+                render(
+                    renderer,
+                    handle,
+                    filter_method,
+                    rotation,
+                    opacity,
+                    drawing_bounds,
+                );
+            });
         }
     } else {
-        render(renderer);
+        render(
+            renderer,
+            handle,
+            filter_method,
+            rotation,
+            opacity,
+            drawing_bounds,
+        );
     }
+}
+
+fn render<Renderer, Handle>(
+    renderer: &mut Renderer,
+    handle: &Handle,
+    filter_method: FilterMethod,
+    rotation: Rotation,
+    opacity: f32,
+    drawing_bounds: Rectangle,
+) where
+    Renderer: image::Renderer<Handle = Handle>,
+    Handle: Clone,
+{
+    renderer.draw_image(
+        image::Image {
+            handle: handle.clone(),
+            filter_method,
+            rotation: rotation.radians(),
+            opacity,
+            snap: true,
+        },
+        drawing_bounds,
+    );
 }
 
 impl<Message, Theme, Renderer, Handle> Widget<Message, Theme, Renderer>

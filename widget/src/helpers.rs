@@ -7,6 +7,7 @@ use crate::core;
 use crate::core::widget::operation::{self, Operation};
 use crate::core::window;
 use crate::core::{Element, Length, Pixels, Widget};
+use crate::float::{self, Float};
 use crate::keyed;
 use crate::overlay;
 use crate::pane_grid::{self, PaneGrid};
@@ -692,8 +693,9 @@ where
         fn overlay<'b>(
             &'b mut self,
             state: &'b mut core::widget::Tree,
-            layout: core::Layout<'_>,
+            layout: core::Layout<'b>,
             renderer: &Renderer,
+            viewport: &Rectangle,
             translation: core::Vector,
         ) -> Option<core::overlay::Element<'b, Message, Theme, Renderer>>
         {
@@ -701,6 +703,7 @@ where
                 state,
                 layout,
                 renderer,
+                viewport,
                 translation,
             )
         }
@@ -946,8 +949,9 @@ where
         fn overlay<'b>(
             &'b mut self,
             tree: &'b mut core::widget::Tree,
-            layout: core::Layout<'_>,
+            layout: core::Layout<'b>,
             renderer: &Renderer,
+            viewport: &Rectangle,
             translation: core::Vector,
         ) -> Option<core::overlay::Element<'b, Message, Theme, Renderer>>
         {
@@ -959,6 +963,7 @@ where
                         tree,
                         layout,
                         renderer,
+                        viewport,
                         translation,
                     )
                 });
@@ -2117,4 +2122,15 @@ where
     Renderer: core::Renderer,
 {
     PaneGrid::new(state, view)
+}
+
+/// Creates a new [`Float`] widget with the given content.
+pub fn float<'a, Message, Theme, Renderer>(
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+) -> Float<'a, Message, Theme, Renderer>
+where
+    Theme: float::Catalog,
+    Renderer: core::Renderer,
+{
+    Float::new(content)
 }
