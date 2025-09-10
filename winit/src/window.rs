@@ -55,8 +55,9 @@ where
         program: &program::Instance<P>,
         compositor: &mut C,
         exit_on_close_request: bool,
+        system_theme: theme::Mode,
     ) -> &mut Window<P, C> {
-        let state = State::new(program, id, &window);
+        let state = State::new(program, id, &window, system_theme);
         let viewport_version = state.viewport_version();
         let physical_size = state.physical_size();
         let surface = compositor.create_surface(
@@ -346,7 +347,7 @@ where
 
             self.content = Renderer::Paragraph::with_spans(Text {
                 content: &spans,
-                bounds: Size::INFINITY,
+                bounds: Size::INFINITE,
                 size: preedit
                     .text_size
                     .unwrap_or_else(|| renderer.default_size()),

@@ -3,6 +3,7 @@ use crate::core;
 use crate::core::alignment;
 use crate::core::layout;
 use crate::core::mouse;
+use crate::core::overlay;
 use crate::core::renderer;
 use crate::core::widget;
 use crate::core::{
@@ -126,10 +127,10 @@ where
             }
         }
 
-        if width == Length::Shrink {
-            if let Some(first) = columns.first_mut() {
-                first.width = Length::Fill;
-            }
+        if width == Length::Shrink
+            && let Some(first) = columns.first_mut()
+        {
+            first.width = Length::Fill;
         }
 
         Self {
@@ -231,7 +232,7 @@ where
     }
 
     fn layout(
-        &self,
+        &mut self,
         tree: &mut widget::Tree,
         renderer: &Renderer,
         limits: &layout::Limits,
@@ -264,7 +265,7 @@ where
         let mut y = self.padding_y;
 
         for (i, (cell, state)) in
-            self.cells.iter().zip(&mut tree.children).enumerate()
+            self.cells.iter_mut().zip(&mut tree.children).enumerate()
         {
             let row = i / columns;
             let column = i % columns;
@@ -305,7 +306,7 @@ where
             )
             .width(width);
 
-            let layout = cell.as_widget().layout(state, renderer, &limits);
+            let layout = cell.as_widget_mut().layout(state, renderer, &limits);
             let size = limits.resolve(width, Length::Shrink, layout.size());
 
             metrics.columns[column] = metrics.columns[column].max(size.width);
@@ -343,7 +344,7 @@ where
         let mut y = self.padding_y;
 
         for (i, (cell, state)) in
-            self.cells.iter().zip(&mut tree.children).enumerate()
+            self.cells.iter_mut().zip(&mut tree.children).enumerate()
         {
             let row = i / columns;
             let column = i % columns;
@@ -395,7 +396,7 @@ where
             )
             .width(width);
 
-            let layout = cell.as_widget().layout(state, renderer, &limits);
+            let layout = cell.as_widget_mut().layout(state, renderer, &limits);
             let size = limits.resolve(
                 if let Length::Fixed(_) = width {
                     width
@@ -459,6 +460,30 @@ where
         );
 
         layout::Node::with_children(intrinsic, cells)
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut widget::Tree,
+        event: &core::Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn core::Clipboard,
+        shell: &mut core::Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        for ((cell, state), layout) in self
+            .cells
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(layout.children())
+        {
+            cell.as_widget_mut().update(
+                state, event, layout, cursor, renderer, clipboard, shell,
+                viewport,
+            );
+        }
     }
 
     fn draw(
@@ -532,6 +557,63 @@ where
                 y += self.separator_y + self.padding_y;
             }
         }
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &widget::Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.cells
+            .iter()
+            .zip(&tree.children)
+            .zip(layout.children())
+            .map(|((cell, state), layout)| {
+                cell.as_widget().mouse_interaction(
+                    state, layout, cursor, viewport, renderer,
+                )
+            })
+            .max()
+            .unwrap_or_default()
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        for ((cell, state), layout) in self
+            .cells
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(layout.children())
+        {
+            cell.as_widget_mut()
+                .operate(state, layout, renderer, operation);
+        }
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        state: &'b mut widget::Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: core::Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        overlay::from_children(
+            &mut self.cells,
+            state,
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
     }
 }
 

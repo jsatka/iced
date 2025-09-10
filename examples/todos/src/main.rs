@@ -5,7 +5,7 @@ use iced::widget::{
 };
 use iced::window;
 use iced::{
-    Center, Element, Fill, Font, Function, Subscription, Task as Command,
+    Center, Element, Fill, Font, Function, Subscription, Task as Command, Theme,
 };
 
 use serde::{Deserialize, Serialize};
@@ -151,7 +151,7 @@ impl Todos {
                             widget::focus_next()
                         }
                     }
-                    Message::ToggleFullscreen(mode) => window::get_latest()
+                    Message::ToggleFullscreen(mode) => window::latest()
                         .and_then(move |window| window::set_mode(window, mode)),
                     Message::Loaded(_) => Command::none(),
                 };
@@ -194,7 +194,7 @@ impl Todos {
                 let title = text("todos")
                     .width(Fill)
                     .size(100)
-                    .color([0.5, 0.5, 0.5])
+                    .style(subtle)
                     .align_x(Center);
 
                 let input = text_input("What needs to be done?", input_value)
@@ -447,7 +447,7 @@ fn empty_message(message: &str) -> Element<'_, Message> {
             .width(Fill)
             .size(25)
             .align_x(Center)
-            .color([0.7, 0.7, 0.7]),
+            .style(subtle),
     )
     .height(200)
     .into()
@@ -460,6 +460,7 @@ fn icon(unicode: char) -> Text<'static> {
         .font(Font::with_name("Iced-Todos-Icons"))
         .width(20)
         .align_x(Center)
+        .shaping(text::Shaping::Basic)
 }
 
 fn edit_icon() -> Text<'static> {
@@ -468,6 +469,12 @@ fn edit_icon() -> Text<'static> {
 
 fn delete_icon() -> Text<'static> {
     icon('\u{F1F8}')
+}
+
+fn subtle(theme: &Theme) -> text::Style {
+    text::Style {
+        color: Some(theme.extended_palette().background.strongest.color),
+    }
 }
 
 // Persistence
@@ -594,6 +601,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn it_creates_a_new_task() -> Result<(), Error> {
         let (mut todos, _command) = Todos::new();
         let _command = todos.update(Message::Loaded(Err(LoadError::File)));

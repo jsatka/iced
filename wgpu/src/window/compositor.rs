@@ -327,7 +327,7 @@ impl graphics::Compositor for Compositor {
         );
     }
 
-    fn fetch_information(&self) -> compositor::Information {
+    fn information(&self) -> compositor::Information {
         let information = self.adapter.get_info();
 
         compositor::Information {
