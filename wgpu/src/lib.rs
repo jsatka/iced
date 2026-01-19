@@ -77,6 +77,7 @@ pub struct Renderer {
     default_font: Font,
     default_text_size: Pixels,
     layers: layer::Stack,
+    scale_factor: Option<f32>,
 
     quad: quad::State,
     triangle: triangle::State,
@@ -99,6 +100,7 @@ impl Renderer {
             default_font,
             default_text_size,
             layers: layer::Stack::new(),
+            scale_factor: None,
 
             quad: quad::State::new(),
             triangle: triangle::State::new(&engine.device, &engine.triangle_pipeline),
@@ -654,10 +656,6 @@ impl core::Renderer for Renderer {
         layer.draw_quad(quad, background.into(), transformation);
     }
 
-    fn reset(&mut self, new_bounds: Rectangle) {
-        self.layers.reset(new_bounds);
-    }
-
     fn allocate_image(
         &mut self,
         _handle: &core::image::Handle,
@@ -667,6 +665,23 @@ impl core::Renderer for Renderer {
         self.image_cache
             .get_mut()
             .allocate_image(_handle, _callback);
+    }
+
+    fn hint(&mut self, scale_factor: f32) {
+        self.scale_factor = Some(scale_factor);
+    }
+
+    fn scale_factor(&self) -> Option<f32> {
+        Some(self.scale_factor? * self.layers.transformation().scale_factor())
+    }
+
+    fn tick(&mut self) {
+        #[cfg(feature = "image")]
+        self.image_cache.get_mut().receive();
+    }
+
+    fn reset(&mut self, new_bounds: Rectangle) {
+        self.layers.reset(new_bounds);
     }
 }
 

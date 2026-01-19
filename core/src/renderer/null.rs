@@ -14,8 +14,6 @@ impl Renderer for () {
 
     fn end_transformation(&mut self) {}
 
-    fn reset(&mut self, _new_bounds: Rectangle) {}
-
     fn fill_quad(&mut self, _quad: renderer::Quad, _background: impl Into<Background>) {}
 
     fn allocate_image(
@@ -26,6 +24,14 @@ impl Renderer for () {
         #[allow(unsafe_code)]
         callback(Ok(unsafe { image::allocate(handle, Size::new(100, 100)) }));
     }
+
+    fn hint(&mut self, _scale_factor: f32) {}
+
+    fn scale_factor(&self) -> Option<f32> {
+        None
+    }
+
+    fn reset(&mut self, _new_bounds: Rectangle) {}
 }
 
 impl text::Renderer for () {
@@ -89,6 +95,10 @@ impl text::Paragraph for () {
 
     fn compare(&self, _text: Text<()>) -> text::Difference {
         text::Difference::None
+    }
+
+    fn hint_factor(&self) -> Option<f32> {
+        None
     }
 
     fn size(&self) -> Pixels {
@@ -184,6 +194,10 @@ impl text::Editor for () {
         Size::ZERO
     }
 
+    fn hint_factor(&self) -> Option<f32> {
+        None
+    }
+
     fn min_bounds(&self) -> Size {
         Size::ZERO
     }
@@ -195,6 +209,7 @@ impl text::Editor for () {
         _new_size: Pixels,
         _new_line_height: text::LineHeight,
         _new_wrapping: text::Wrapping,
+        _new_hint_factor: Option<f32>,
         _new_highlighter: &mut impl text::Highlighter,
     ) {
     }

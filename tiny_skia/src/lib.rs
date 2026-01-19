@@ -71,7 +71,6 @@ impl Renderer {
         background_color: Color,
     ) {
         let scale_factor = viewport.scale_factor();
-
         self.layers.flush();
 
         for &damage_bounds in damage {
@@ -214,10 +213,6 @@ impl core::Renderer for Renderer {
         layer.draw_quad(quad, background.into(), transformation);
     }
 
-    fn reset(&mut self, new_bounds: Rectangle) {
-        self.layers.reset(new_bounds);
-    }
-
     fn allocate_image(
         &mut self,
         _handle: &core::image::Handle,
@@ -230,6 +225,19 @@ impl core::Renderer for Renderer {
 
         #[cfg(not(feature = "image"))]
         callback(Err(core::image::Error::Unsupported));
+    }
+
+    fn hint(&mut self, _scale_factor: f32) {
+        // TODO: No hinting supported
+        // We'll replace `tiny-skia` with `vello_cpu` soon
+    }
+
+    fn scale_factor(&self) -> Option<f32> {
+        None
+    }
+
+    fn reset(&mut self, new_bounds: Rectangle) {
+        self.layers.reset(new_bounds);
     }
 }
 

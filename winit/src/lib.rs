@@ -42,7 +42,7 @@ use crate::core::renderer;
 use crate::core::theme;
 use crate::core::time::Instant;
 use crate::core::widget::operation;
-use crate::core::{Point, Size};
+use crate::core::{Point, Renderer, Size};
 use crate::futures::futures::channel::mpsc;
 use crate::futures::futures::channel::oneshot;
 use crate::futures::futures::task;
@@ -646,6 +646,9 @@ async fn run_instance<P>(
 
                 let logical_size = window.state.logical_size();
 
+                #[cfg(feature = "hinting")]
+                window.renderer.hint(window.state.scale_factor());
+
                 let _ = user_interfaces.insert(
                     id,
                     build_user_interface(
@@ -753,6 +756,9 @@ async fn run_instance<P>(
 
                         // Window was resized between redraws
                         if window.surface_version != window.state.surface_version() {
+                            #[cfg(feature = "hinting")]
+                            window.renderer.hint(window.state.scale_factor());
+
                             let ui = user_interfaces.remove(&id).expect("Remove user interface");
 
                             let layout_span = debug::layout(id);
@@ -1063,7 +1069,7 @@ async fn run_instance<P>(
                                 }
                             });
 
-                            if window_events.is_empty() && messages.is_empty() {
+                            if window_events.is_empty() {
                                 continue;
                             }
 
@@ -1260,6 +1266,7 @@ fn run_action<'a, P, C>(
     C: Compositor<Renderer = P::Renderer> + 'static,
     P::Theme: theme::Base,
 {
+    use crate::core::Renderer as _;
     use crate::runtime::clipboard;
     use crate::runtime::window;
 
@@ -1631,8 +1638,6 @@ fn run_action<'a, P, C>(
         }
         Action::Image(action) => match action {
             image::Action::Allocate(handle, sender) => {
-                use core::Renderer as _;
-
                 // TODO: Shared image cache in compositor
                 if let Some((_id, window)) = window_manager.iter_mut().next() {
                     window.renderer.allocate_image(&handle, move |allocation| {
@@ -1647,6 +1652,11 @@ fn run_action<'a, P, C>(
                 compositor.load_font(bytes.clone());
 
                 let _ = channel.send(Ok(()));
+            }
+        }
+        Action::Tick => {
+            for (_id, window) in window_manager.iter_mut() {
+                window.renderer.tick();
             }
         }
         Action::Reload => {
@@ -1686,6 +1696,9 @@ where
 {
     for (id, window) in window_manager.iter_mut() {
         window.state.synchronize(program, id, &window.raw);
+
+        #[cfg(feature = "hinting")]
+        window.renderer.hint(window.state.scale_factor());
     }
 
     debug::theme_changed(|| {
