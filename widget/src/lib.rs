@@ -12,6 +12,7 @@ pub use core::widget::{Id, Void};
 mod action;
 mod column;
 mod mouse_area;
+mod opacity;
 mod pin;
 mod responsive;
 mod stack;
@@ -24,6 +25,8 @@ pub mod component;
 pub mod container;
 pub mod float;
 pub mod grid;
+#[cfg(feature = "wgpu")]
+pub mod isolated_layer;
 pub mod keyed;
 pub mod lazy;
 pub mod overlay;
@@ -66,10 +69,15 @@ pub use container::Container;
 pub use float::Float;
 #[doc(no_inline)]
 pub use grid::Grid;
+#[cfg(feature = "wgpu")]
+#[doc(no_inline)]
+pub use isolated_layer::IsolatedLayer;
 #[doc(no_inline)]
 pub use lazy::Lazy;
 #[doc(no_inline)]
 pub use mouse_area::MouseArea;
+#[doc(no_inline)]
+pub use opacity::Opacity;
 #[doc(no_inline)]
 pub use pane_grid::PaneGrid;
 #[doc(no_inline)]

@@ -309,6 +309,10 @@ impl State {
         Self::default()
     }
 
+    pub fn prepared_layer_count(&self) -> usize {
+        self.prepare_layer
+    }
+
     pub fn prepare(
         &mut self,
         pipeline: &Pipeline,

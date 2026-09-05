@@ -1,8 +1,8 @@
 use crate::core::{Size, Transformation};
 use crate::graphics;
 
+use rustc_hash::FxHashMap;
 use std::num::NonZeroU64;
-use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct Pipeline {
@@ -12,7 +12,6 @@ pub struct Pipeline {
     constant_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     sample_count: u32,
-    targets: Arc<RwLock<Option<Targets>>>,
 }
 
 impl Pipeline {
@@ -113,35 +112,14 @@ impl Pipeline {
             constant_layout,
             texture_layout,
             sample_count: antialiasing.sample_count(),
-            targets: Arc::new(RwLock::new(None)),
         }
     }
 
-    fn targets(&self, device: &wgpu::Device, region_size: Size<u32>) -> Targets {
-        let mut targets = self.targets.write().expect("Write MSAA targets");
-
-        match targets.as_mut() {
-            Some(targets)
-                if region_size.width <= targets.size.width
-                    && region_size.height <= targets.size.height => {}
-            _ => {
-                *targets = Some(Targets::new(
-                    device,
-                    self.format,
-                    &self.texture_layout,
-                    self.sample_count,
-                    region_size,
-                ));
-            }
-        }
-
-        targets.as_ref().unwrap().clone()
-    }
-
-    pub fn render_pass<'a>(&self, encoder: &'a mut wgpu::CommandEncoder) -> wgpu::RenderPass<'a> {
-        let targets = self.targets.read().expect("Read MSAA targets");
-        let targets = targets.as_ref().unwrap();
-
+    fn render_pass<'a>(
+        &self,
+        encoder: &'a mut wgpu::CommandEncoder,
+        targets: &'a Targets,
+    ) -> wgpu::RenderPass<'a> {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("iced_wgpu.triangle.render_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -161,7 +139,7 @@ impl Pipeline {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Targets {
     attachment: wgpu::TextureView,
     resolve: wgpu::TextureView,
@@ -237,14 +215,23 @@ struct Ratio {
     _padding: [f32; 2],
 }
 
-pub struct State {
+struct ContextState {
+    targets: Targets,
     ratio: wgpu::Buffer,
     constants: wgpu::BindGroup,
     last_ratio: Option<Ratio>,
+    last_used: u64,
 }
 
-impl State {
-    pub fn new(device: &wgpu::Device, pipeline: &Pipeline) -> Self {
+impl ContextState {
+    fn new(device: &wgpu::Device, pipeline: &Pipeline, region_size: Size<u32>) -> Self {
+        let targets = Targets::new(
+            device,
+            pipeline.format,
+            &pipeline.texture_layout,
+            pipeline.sample_count,
+            region_size,
+        );
         let ratio = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("iced_wgpu::triangle::msaa ratio"),
             size: std::mem::size_of::<Ratio>() as u64,
@@ -268,9 +255,25 @@ impl State {
         });
 
         Self {
+            targets,
             ratio,
             constants,
             last_ratio: None,
+            last_used: 0,
+        }
+    }
+}
+
+pub struct State {
+    contexts: FxHashMap<(u32, u32), ContextState>,
+    frame: u64,
+}
+
+impl State {
+    pub fn new(_device: &wgpu::Device, _pipeline: &Pipeline) -> Self {
+        Self {
+            contexts: FxHashMap::default(),
+            frame: 0,
         }
     }
 
@@ -282,27 +285,31 @@ impl State {
         pipeline: &Pipeline,
         region_size: Size<u32>,
     ) -> Transformation {
-        let targets = pipeline.targets(device, region_size);
+        let context = self
+            .contexts
+            .entry((region_size.width, region_size.height))
+            .or_insert_with(|| ContextState::new(device, pipeline, region_size));
+        context.last_used = self.frame;
 
         let ratio = Ratio {
-            u: region_size.width as f32 / targets.size.width as f32,
-            v: region_size.height as f32 / targets.size.height as f32,
+            u: region_size.width as f32 / context.targets.size.width as f32,
+            v: region_size.height as f32 / context.targets.size.height as f32,
             _padding: [0.0; 2],
         };
 
-        if Some(ratio) != self.last_ratio {
+        if Some(ratio) != context.last_ratio {
             belt.write_buffer(
                 encoder,
-                &self.ratio,
+                &context.ratio,
                 0,
                 NonZeroU64::new(std::mem::size_of::<Ratio>() as u64).expect("non-empty ratio"),
             )
             .copy_from_slice(bytemuck::bytes_of(&ratio));
 
-            self.last_ratio = Some(ratio);
+            context.last_ratio = Some(ratio);
         }
 
-        Transformation::orthographic(targets.size.width, targets.size.height)
+        Transformation::orthographic(context.targets.size.width, context.targets.size.height)
     }
 
     pub fn render(
@@ -310,7 +317,12 @@ impl State {
         pipeline: &Pipeline,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
+        target_size: Size<u32>,
     ) {
+        let context = self
+            .contexts
+            .get(&(target_size.width, target_size.height))
+            .expect("prepared MSAA target context");
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("iced_wgpu::triangle::msaa render pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -328,19 +340,37 @@ impl State {
             multiview_mask: None,
         });
 
-        render_pass.set_pipeline(&pipeline.raw);
-        render_pass.set_bind_group(0, &self.constants, &[]);
-        render_pass.set_bind_group(
-            1,
-            &pipeline
-                .targets
-                .read()
-                .expect("Read MSAA targets")
-                .as_ref()
-                .unwrap()
-                .bind_group,
-            &[],
+        render_pass.set_viewport(
+            0.0,
+            0.0,
+            target_size.width as f32,
+            target_size.height as f32,
+            0.0,
+            1.0,
         );
+        render_pass.set_scissor_rect(0, 0, target_size.width, target_size.height);
+        render_pass.set_pipeline(&pipeline.raw);
+        render_pass.set_bind_group(0, &context.constants, &[]);
+        render_pass.set_bind_group(1, &context.targets.bind_group, &[]);
         render_pass.draw(0..6, 0..1);
+    }
+
+    pub fn render_pass<'a>(
+        &'a self,
+        pipeline: &Pipeline,
+        encoder: &'a mut wgpu::CommandEncoder,
+        target_size: Size<u32>,
+    ) -> wgpu::RenderPass<'a> {
+        let context = self
+            .contexts
+            .get(&(target_size.width, target_size.height))
+            .expect("prepared MSAA target context");
+        pipeline.render_pass(encoder, &context.targets)
+    }
+
+    pub fn trim(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+        self.contexts
+            .retain(|_, context| self.frame.saturating_sub(context.last_used) <= 120);
     }
 }

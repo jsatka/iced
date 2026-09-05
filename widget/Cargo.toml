@@ -22,7 +22,7 @@ image = ["iced_renderer/image"]
 svg = ["iced_renderer/svg"]
 canvas = ["iced_renderer/geometry"]
 qr_code = ["canvas", "dep:qrcode"]
-wgpu = ["iced_renderer/wgpu-bare"]
+wgpu = ["iced_renderer/wgpu-bare", "dep:bytemuck"]
 markdown = ["dep:pulldown-cmark"]
 highlighter = ["dep:iced_highlighter"]
 advanced = []
@@ -35,6 +35,8 @@ num-traits.workspace = true
 log.workspace = true
 rustc-hash.workspace = true
 thiserror.workspace = true
+bytemuck.workspace = true
+bytemuck.optional = true
 unicode-segmentation.workspace = true
 
 qrcode.workspace = true
@@ -45,3 +47,6 @@ pulldown-cmark.optional = true
 
 iced_highlighter.workspace = true
 iced_highlighter.optional = true
+
+[dev-dependencies]
+iced_wgpu = { workspace = true, default-features = true }

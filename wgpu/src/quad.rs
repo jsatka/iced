@@ -4,7 +4,7 @@ mod solid;
 use gradient::Gradient;
 use solid::Solid;
 
-use crate::core::{Background, Rectangle, Transformation};
+use crate::core::{Background, Point, Rectangle, Transformation};
 use crate::graphics;
 use crate::graphics::color;
 
@@ -64,6 +64,10 @@ impl State {
         Self::default()
     }
 
+    pub fn prepared_layer_count(&self) -> usize {
+        self.prepare_layer
+    }
+
     pub fn prepare(
         &mut self,
         pipeline: &Pipeline,
@@ -73,6 +77,7 @@ impl State {
         quads: &Batch,
         transformation: Transformation,
         scale: f32,
+        origin: Point,
     ) {
         if self.layers.len() <= self.prepare_layer {
             self.layers
@@ -80,7 +85,7 @@ impl State {
         }
 
         let layer = &mut self.layers[self.prepare_layer];
-        layer.prepare(device, encoder, belt, quads, transformation, scale);
+        layer.prepare(device, encoder, belt, quads, transformation, scale, origin);
 
         self.prepare_layer += 1;
     }
@@ -199,8 +204,9 @@ impl Layer {
         quads: &Batch,
         transformation: Transformation,
         scale: f32,
+        origin: Point,
     ) {
-        self.update(encoder, belt, transformation, scale);
+        self.update(encoder, belt, transformation, scale, origin);
 
         if !quads.solids.is_empty() {
             self.solid.prepare(device, encoder, belt, &quads.solids);
@@ -218,8 +224,9 @@ impl Layer {
         belt: &mut wgpu::util::StagingBelt,
         transformation: Transformation,
         scale: f32,
+        origin: Point,
     ) {
-        let uniforms = Uniforms::new(transformation, scale);
+        let uniforms = Uniforms::new(transformation, scale, origin);
         let bytes = bytemuck::bytes_of(&uniforms);
 
         belt.write_buffer(
@@ -323,17 +330,17 @@ fn color_target_state(format: wgpu::TextureFormat) -> [Option<wgpu::ColorTargetS
 struct Uniforms {
     transform: [f32; 16],
     scale: f32,
-    // Uniforms must be aligned to their largest member,
-    // this uses a mat4x4<f32> which aligns to 16, so align to that
-    _padding: [f32; 3],
+    _padding: f32,
+    origin: [f32; 2],
 }
 
 impl Uniforms {
-    fn new(transformation: Transformation, scale: f32) -> Uniforms {
+    fn new(transformation: Transformation, scale: f32, origin: Point) -> Uniforms {
         Self {
             transform: *transformation.as_ref(),
             scale,
-            _padding: [0.0; 3],
+            _padding: 0.0,
+            origin: origin.into(),
         }
     }
 }
@@ -343,7 +350,8 @@ impl Default for Uniforms {
         Self {
             transform: *Transformation::IDENTITY.as_ref(),
             scale: 1.0,
-            _padding: [0.0; 3],
+            _padding: 0.0,
+            origin: [0.0; 2],
         }
     }
 }

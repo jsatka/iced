@@ -199,6 +199,10 @@ impl State {
         Self::default()
     }
 
+    pub fn prepared_layer_count(&self) -> usize {
+        self.prepare_layer
+    }
+
     pub fn prepare(
         &mut self,
         pipeline: &Pipeline,
@@ -207,8 +211,8 @@ impl State {
         encoder: &mut wgpu::CommandEncoder,
         cache: &mut Cache,
         images: &Batch,
-        transformation: Transformation,
-        scale: f32,
+        projection: Transformation,
+        raster_transform: Transformation,
     ) {
         if self.layers.len() <= self.prepare_layer {
             self.layers.push(Layer::new(
@@ -220,6 +224,7 @@ impl State {
         }
 
         let layer = &mut self.layers[self.prepare_layer];
+        let scale = raster_transform.scale_factor();
 
         let mut atlas: Option<Arc<wgpu::BindGroup>> = None;
 
@@ -231,8 +236,8 @@ impl State {
                     bounds,
                     clip_bounds,
                 } => {
-                    let bounds = (*bounds * scale).round();
-                    let clip_bounds = (*clip_bounds * scale).round();
+                    let bounds = (*bounds * raster_transform).round();
+                    let clip_bounds = (*clip_bounds * raster_transform).round();
 
                     if bounds.width < 1.0 || bounds.height < 1.0 {
                         continue;
@@ -280,8 +285,8 @@ impl State {
                     bounds,
                     clip_bounds,
                 } => {
-                    let bounds = (*bounds * scale).round();
-                    let clip_bounds = (*clip_bounds * scale).round();
+                    let bounds = (*bounds * raster_transform).round();
+                    let clip_bounds = (*clip_bounds * raster_transform).round();
 
                     if bounds.width < 1.0 || bounds.height < 1.0 {
                         continue;
@@ -331,7 +336,7 @@ impl State {
             device,
             encoder,
             belt,
-            transformation,
+            projection,
             &self.nearest_instances,
             &self.linear_instances,
         );

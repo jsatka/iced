@@ -38,6 +38,18 @@ where
     A: core::Renderer,
     B: core::Renderer,
 {
+    fn start_isolated_layer(&mut self, layer: core::isolated_layer::Layer) {
+        delegate!(self, renderer, renderer.start_isolated_layer(layer));
+    }
+
+    fn end_isolated_layer(&mut self) {
+        delegate!(self, renderer, renderer.end_isolated_layer());
+    }
+
+    fn mark_cache_alive(&self, keep_alive: core::isolated_layer::CacheKeepAlive) {
+        delegate!(self, renderer, renderer.mark_cache_alive(keep_alive));
+    }
+
     fn fill_quad(&mut self, quad: renderer::Quad, background: impl Into<Background>) {
         delegate!(self, renderer, renderer.fill_quad(quad, background.into()));
     }
@@ -413,6 +425,32 @@ where
     }
 }
 
+#[cfg(feature = "wgpu-bare")]
+impl<A, B> iced_wgpu::isolated_layer::Renderer for Renderer<A, B>
+where
+    A: iced_wgpu::isolated_layer::Renderer,
+    B: core::Renderer,
+{
+    fn start_isolated_layer_effects(
+        &mut self,
+        layer: iced_wgpu::isolated_layer::Layer,
+        effects: iced_wgpu::isolated_layer::EffectStack,
+    ) {
+        match self {
+            Self::Primary(renderer) => renderer.start_isolated_layer_effects(layer, effects),
+            Self::Secondary(_) => {
+                log::warn!("Isolated-layer effects are not supported with this renderer.");
+            }
+        }
+    }
+
+    fn end_isolated_layer_effects(&mut self) {
+        if let Self::Primary(renderer) = self {
+            renderer.end_isolated_layer_effects();
+        }
+    }
+}
+
 #[cfg(feature = "geometry")]
 mod geometry {
     use super::Renderer;
@@ -643,4 +681,108 @@ where
     B: compositor::Default,
 {
     type Compositor = Compositor<A::Compositor, B::Compositor>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::cell::RefCell;
+
+    #[test]
+    fn cache_keep_alives_are_forwarded_to_the_active_renderer() {
+        let surface = core::isolated_layer::SurfaceHandle::new();
+        let keep_alive =
+            surface.cache_keep_alive_with(core::isolated_layer::CacheResidencyPriority::Protected);
+
+        let primary: Renderer<Probe, Probe> = Renderer::Primary(Probe::default());
+        core::Renderer::mark_cache_alive(&primary, keep_alive.clone());
+
+        match primary {
+            Renderer::Primary(renderer) => {
+                assert_eq!(renderer.keep_alives.into_inner(), vec![keep_alive.clone()]);
+            }
+            Renderer::Secondary(_) => unreachable!(),
+        }
+
+        let secondary: Renderer<Probe, Probe> = Renderer::Secondary(Probe::default());
+        core::Renderer::mark_cache_alive(&secondary, keep_alive.clone());
+
+        match secondary {
+            Renderer::Secondary(renderer) => {
+                assert_eq!(renderer.keep_alives.into_inner(), vec![keep_alive]);
+            }
+            Renderer::Primary(_) => unreachable!(),
+        }
+    }
+
+    #[cfg(feature = "wgpu-bare")]
+    #[test]
+    fn unsupported_effect_scope_still_draws_the_secondary_child() {
+        let mut renderer: Renderer<Probe, Probe> = Renderer::Secondary(Probe::default());
+        let layer =
+            iced_wgpu::isolated_layer::Layer::new(Rectangle::default(), Rectangle::default());
+        let mut drew_child = false;
+
+        iced_wgpu::isolated_layer::Renderer::with_isolated_layer_effects(
+            &mut renderer,
+            layer,
+            iced_wgpu::isolated_layer::EffectStack::new(),
+            |_| drew_child = true,
+        );
+
+        assert!(drew_child);
+    }
+
+    #[derive(Default)]
+    struct Probe {
+        keep_alives: RefCell<Vec<core::isolated_layer::CacheKeepAlive>>,
+    }
+
+    impl core::Renderer for Probe {
+        fn mark_cache_alive(&self, keep_alive: core::isolated_layer::CacheKeepAlive) {
+            self.keep_alives.borrow_mut().push(keep_alive);
+        }
+
+        fn start_layer(&mut self, _bounds: Rectangle) {}
+
+        fn end_layer(&mut self) {}
+
+        fn start_transformation(&mut self, _transformation: Transformation) {}
+
+        fn end_transformation(&mut self) {}
+
+        fn fill_quad(&mut self, _quad: renderer::Quad, _background: impl Into<Background>) {}
+
+        fn allocate_image(
+            &self,
+            _handle: &image::Handle,
+            _callback: impl FnOnce(Result<image::Allocation, image::Error>) + Send + 'static,
+        ) {
+        }
+
+        fn hint(&mut self, _scale: renderer::Scale) {}
+
+        fn scale(&self) -> Option<renderer::Scale> {
+            None
+        }
+
+        fn reset(&mut self, _new_bounds: Rectangle) {}
+
+        fn settings(&self) -> renderer::Settings {
+            renderer::Settings::default()
+        }
+    }
+
+    #[cfg(feature = "wgpu-bare")]
+    impl iced_wgpu::isolated_layer::Renderer for Probe {
+        fn start_isolated_layer_effects(
+            &mut self,
+            _layer: iced_wgpu::isolated_layer::Layer,
+            _effects: iced_wgpu::isolated_layer::EffectStack,
+        ) {
+        }
+
+        fn end_isolated_layer_effects(&mut self) {}
+    }
 }

@@ -437,14 +437,14 @@
 //!                     }
 //!                  }
 //!             } else {
-//!                 Task::none()    
+//!                 Task::none()
 //!             }
 //!         }
 //!         Message::Conversation(message) => {
 //!             if let Screen::Conversation(conversation) = &mut state.screen {
 //!                 conversation.update(message).map(Message::Conversation)
 //!             } else {
-//!                 Task::none()    
+//!                 Task::none()
 //!             }
 //!         }
 //!     }
@@ -525,6 +525,17 @@ pub use crate::core::alignment;
 pub use crate::core::animation;
 pub use crate::core::border;
 pub use crate::core::color;
+/// Layer isolation, composition, caching, and WGPU layer effects.
+pub mod isolated_layer {
+    pub use crate::core::isolated_layer::*;
+
+    #[cfg(feature = "wgpu-bare")]
+    pub use iced_widget::isolated_layer::{
+        AlphaMask, CacheKeepAliveScope, Context, DropShadow, Effect, EffectStack, GaussianBlur,
+        IsolatedLayer, LayerEffect, LayerInputEvidence, LayerInputRecords, Pipeline,
+        PipelineRegistry, Requirements, TextureViews,
+    };
+}
 pub use crate::core::gradient;
 pub use crate::core::padding;
 pub use crate::core::theme;

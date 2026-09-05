@@ -13,6 +13,36 @@ pub const CRISP: bool = cfg!(feature = "crisp");
 
 /// A component that can be used by widgets to draw themselves on a screen.
 pub trait Renderer {
+    /// Starts recording an isolated layer.
+    ///
+    /// An isolated-layer scope is an exact paint-order barrier. Primitives recorded before it are
+    /// painted before it, and primitives recorded after the scope are painted after it, even when
+    /// a renderer normally batches those primitive kinds into a different intra-layer order.
+    ///
+    /// Renderers without isolated-layer support may leave the captured content unchanged.
+    fn start_isolated_layer(&mut self, _layer: crate::isolated_layer::Layer) {}
+
+    /// Ends recording an isolated layer.
+    fn end_isolated_layer(&mut self) {}
+
+    /// Draws the primitives recorded by the closure into an isolated layer.
+    fn with_isolated_layer(
+        &mut self,
+        layer: crate::isolated_layer::Layer,
+        f: impl FnOnce(&mut Self),
+    ) {
+        self.start_isolated_layer(layer);
+        f(self);
+        self.end_isolated_layer();
+    }
+
+    /// Requests continued residency for retained isolated-layer pixels.
+    ///
+    /// A keep-alive addresses one existing output slot and never creates pixels or changes the
+    /// input signature stored with them. Renderers may update the slot's eviction priority while
+    /// refreshing residency. Renderers without isolated-layer caching ignore the request.
+    fn mark_cache_alive(&self, _keep_alive: crate::isolated_layer::CacheKeepAlive) {}
+
     /// Starts recording a new layer.
     fn start_layer(&mut self, bounds: Rectangle);
 

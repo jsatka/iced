@@ -12,7 +12,8 @@ use vertex::Vertex;
 use crate::wgpu;
 use crate::wgpu::util::DeviceExt;
 
-use iced::{Rectangle, Size};
+use iced::Size;
+use iced::widget::shader::RenderRegion;
 
 const SKY_TEXTURE_SIZE: u32 = 128;
 
@@ -265,6 +266,7 @@ impl Pipeline {
             device,
             format,
             depth_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            &uniforms,
         );
 
         Self {
@@ -302,7 +304,7 @@ impl Pipeline {
             self.depth_view = text.create_view(&wgpu::TextureViewDescriptor::default());
             self.depth_texture_size = size;
 
-            self.depth_pipeline.update(device, &text);
+            self.depth_pipeline.update(device, &text, &self.uniforms);
         }
     }
 
@@ -333,23 +335,17 @@ impl Pipeline {
         &self,
         target: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
-        clip_bounds: Rectangle<u32>,
+        region: &RenderRegion,
         num_cubes: u32,
         show_depth: bool,
     ) {
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("cubes.pipeline.pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            let mut pass = begin_render_pass(
+                encoder,
+                target,
+                Some("cubes.pipeline.pass"),
+                region,
+                Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
@@ -357,18 +353,6 @@ impl Pipeline {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-
-            pass.set_viewport(
-                clip_bounds.x as f32,
-                clip_bounds.y as f32,
-                clip_bounds.width as f32,
-                clip_bounds.height as f32,
-                0.0,
-                1.0,
             );
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -378,7 +362,7 @@ impl Pipeline {
         }
 
         if show_depth {
-            self.depth_pipeline.render(encoder, target, clip_bounds);
+            self.depth_pipeline.render(encoder, target, region);
         }
     }
 }
@@ -387,7 +371,6 @@ struct DepthPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
-    sampler: wgpu::Sampler,
     depth_view: wgpu::TextureView,
 }
 
@@ -396,28 +379,28 @@ impl DepthPipeline {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         depth_texture: wgpu::TextureView,
+        uniforms: &wgpu::Buffer,
     ) -> Self {
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("cubes.depth_pipeline.sampler"),
-            ..Default::default()
-        });
-
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("cubes.depth_pipeline.bind_group_layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
                 },
@@ -430,11 +413,11 @@ impl DepthPipeline {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
+                    resource: wgpu::BindingResource::TextureView(&depth_texture),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&depth_texture),
+                    resource: uniforms.as_entire_binding(),
                 },
             ],
         });
@@ -462,13 +445,7 @@ impl DepthPipeline {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
+            depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -488,12 +465,16 @@ impl DepthPipeline {
             pipeline,
             bind_group_layout,
             bind_group,
-            sampler,
             depth_view: depth_texture,
         }
     }
 
-    pub fn update(&mut self, device: &wgpu::Device, depth_texture: &wgpu::Texture) {
+    pub fn update(
+        &mut self,
+        device: &wgpu::Device,
+        depth_texture: &wgpu::Texture,
+        uniforms: &wgpu::Buffer,
+    ) {
         self.depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -502,11 +483,11 @@ impl DepthPipeline {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    resource: wgpu::BindingResource::TextureView(&self.depth_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.depth_view),
+                    resource: uniforms.as_entire_binding(),
                 },
             ],
         });
@@ -516,41 +497,48 @@ impl DepthPipeline {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
-        clip_bounds: Rectangle<u32>,
+        region: &RenderRegion,
     ) {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("cubes.pipeline.depth_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.depth_view,
-                depth_ops: None,
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        pass.set_viewport(
-            clip_bounds.x as f32,
-            clip_bounds.y as f32,
-            clip_bounds.width as f32,
-            clip_bounds.height as f32,
-            0.0,
-            1.0,
+        let mut pass = begin_render_pass(
+            encoder,
+            target,
+            Some("cubes.pipeline.depth_pass"),
+            region,
+            None,
         );
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
         pass.draw(0..6, 0..1);
     }
+}
+
+fn begin_render_pass<'encoder>(
+    encoder: &'encoder mut wgpu::CommandEncoder,
+    target: &wgpu::TextureView,
+    label: Option<&str>,
+    region: &RenderRegion,
+    depth_stencil_attachment: Option<wgpu::RenderPassDepthStencilAttachment<'_>>,
+) -> wgpu::RenderPass<'encoder> {
+    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label,
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+
+    region.configure(&mut render_pass);
+
+    render_pass
 }
 
 fn load_skybox_data() -> Vec<u8> {
