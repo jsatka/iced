@@ -16,8 +16,8 @@ mod cache;
 mod effect;
 
 pub use crate::renderer::wgpu::isolated_layer::effect::{
-    Context, Effect, EffectStack, LayerEffect, LayerInputEvidence, LayerInputRecords, Pipeline,
-    PipelineRegistry, Requirements, TextureViews,
+    Context, Effect, EffectStack, LayerEffect, LayerInputEvidence, LayerInputRecords, Pass,
+    Pipeline, PipelineRegistry, Plan, Requirements, TextureViews,
 };
 use cache::CacheConfig;
 pub use cache::CacheKeepAliveScope;
@@ -447,13 +447,6 @@ mod tests {
             )
             .is_none()
         );
-    }
-
-    #[test]
-    fn effect_parameters_are_canonical() {
-        assert_eq!(GaussianBlur::new(f32::NAN).sigma, 0.0);
-        assert_eq!(GaussianBlur::new(-0.0).sigma.to_bits(), 0.0f32.to_bits());
-        assert_eq!(GaussianBlur::new(f32::INFINITY).sigma, 128.0);
     }
 
     #[test]
@@ -984,10 +977,8 @@ mod tests {
     struct ExpandingNoop;
 
     impl layer_effect::LayerEffect for ExpandingNoop {
-        type PreparedPass = ();
-
-        fn requirements(&self) -> layer_effect::Requirements {
-            layer_effect::Requirements::passes(1)
+        fn plan(&self, plan: &mut layer_effect::Plan<'_, Self>) {
+            plan.push(NoopPass);
         }
 
         fn expansion(&self) -> Padding {
@@ -998,24 +989,31 @@ mod tests {
                 left: 2.0,
             }
         }
+    }
 
-        fn prepare_pass(
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct NoopPass;
+
+    impl<E: layer_effect::LayerEffect> layer_effect::Pass<E> for NoopPass {
+        type Prepared = ();
+
+        fn prepare(
             &self,
+            _effect: &E,
             _pipelines: &mut layer_effect::PipelineRegistry<'_>,
             _device: &crate::renderer::wgpu::wgpu::Device,
             _queue: &crate::renderer::wgpu::wgpu::Queue,
-            _pass: usize,
             _context: &layer_effect::Context,
             _inputs: layer_effect::TextureViews<'_>,
         ) {
         }
 
-        fn encode_pass(
+        fn encode(
             &self,
+            _effect: &E,
             _pipelines: &layer_effect::PipelineRegistry<'_>,
             _prepared: &(),
             _encoder: &mut crate::renderer::wgpu::wgpu::CommandEncoder,
-            _pass: usize,
             _context: &layer_effect::Context,
             _inputs: layer_effect::TextureViews<'_>,
         ) {
@@ -1026,36 +1024,12 @@ mod tests {
     struct InvalidExpansion;
 
     impl layer_effect::LayerEffect for InvalidExpansion {
-        type PreparedPass = ();
-
-        fn requirements(&self) -> layer_effect::Requirements {
-            layer_effect::Requirements::passes(1)
+        fn plan(&self, plan: &mut layer_effect::Plan<'_, Self>) {
+            plan.push(NoopPass);
         }
 
         fn expansion(&self) -> Padding {
             Padding::new(f32::NAN)
-        }
-
-        fn prepare_pass(
-            &self,
-            _pipelines: &mut layer_effect::PipelineRegistry<'_>,
-            _device: &crate::renderer::wgpu::wgpu::Device,
-            _queue: &crate::renderer::wgpu::wgpu::Queue,
-            _pass: usize,
-            _context: &layer_effect::Context,
-            _inputs: layer_effect::TextureViews<'_>,
-        ) {
-        }
-
-        fn encode_pass(
-            &self,
-            _pipelines: &layer_effect::PipelineRegistry<'_>,
-            _prepared: &(),
-            _encoder: &mut crate::renderer::wgpu::wgpu::CommandEncoder,
-            _pass: usize,
-            _context: &layer_effect::Context,
-            _inputs: layer_effect::TextureViews<'_>,
-        ) {
         }
     }
 

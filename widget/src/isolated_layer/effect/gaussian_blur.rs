@@ -1,8 +1,8 @@
 use super::canonical;
-use super::pipeline::{BlurParams, BlurPipeline, Prepared, PreparedPass};
+use super::pipeline::{BlurAxis, BlurParams, BlurPipeline, Prepared};
 use crate::core::Padding;
 use crate::renderer::wgpu::isolated_layer::effect::{
-    self, PipelineRegistry, Requirements, TextureViews,
+    self, PipelineRegistry, Plan, Requirements, TextureViews,
 };
 use crate::renderer::wgpu::wgpu;
 
@@ -29,10 +29,9 @@ impl Default for GaussianBlur {
 }
 
 impl effect::LayerEffect for GaussianBlur {
-    type PreparedPass = PreparedPass;
-
-    fn requirements(&self) -> Requirements {
-        Requirements::passes(2).writes_every_pixel()
+    fn plan(&self, plan: &mut Plan<'_, Self>) {
+        plan.push(BlurPass(BlurAxis::Horizontal));
+        plan.push(BlurPass(BlurAxis::Vertical));
     }
 
     fn expansion(&self) -> Padding {
@@ -42,46 +41,48 @@ impl effect::LayerEffect for GaussianBlur {
     fn is_translation_invariant(&self) -> bool {
         true
     }
+}
 
-    fn prepare_pass(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlurPass(BlurAxis);
+
+impl effect::Pass<GaussianBlur> for BlurPass {
+    type Prepared = Prepared;
+
+    fn requirements(&self, _effect: &GaussianBlur) -> Requirements {
+        Requirements::new().writes_every_pixel()
+    }
+
+    fn prepare(
         &self,
+        effect: &GaussianBlur,
         pipelines: &mut PipelineRegistry<'_>,
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
-        pass: usize,
         context: &effect::Context,
         views: TextureViews<'_>,
-    ) -> PreparedPass {
+    ) -> Prepared {
         let pipeline = pipelines.get_or_init::<BlurPipeline>();
-        let input = if pass == 0 {
-            views.stage_input
-        } else {
-            views.previous
-        };
-        Box::new(pipeline.0.prepare(
+        pipeline.0.prepare(
             device,
             "iced_widget.isolated_layer.blur",
-            &BlurParams::new(context, pass, self.sigma),
-            &[(0, input)],
+            &BlurParams::new(context, self.0, effect.sigma),
+            &[(0, views.previous)],
             1,
             2,
-        ))
+        )
     }
 
-    fn encode_pass(
+    fn encode(
         &self,
+        _effect: &GaussianBlur,
         pipelines: &PipelineRegistry<'_>,
-        prepared: &PreparedPass,
+        prepared: &Prepared,
         encoder: &mut wgpu::CommandEncoder,
-        _pass: usize,
         context: &effect::Context,
         views: TextureViews<'_>,
     ) {
         let pipeline = pipelines.get::<BlurPipeline>().expect("blur pipeline");
-        let prepared = prepared
-            .as_ref()
-            .downcast_ref::<Prepared>()
-            .expect("blur pass");
         pipeline.0.render(
             encoder,
             views.output,

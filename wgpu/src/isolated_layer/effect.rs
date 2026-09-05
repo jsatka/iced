@@ -9,22 +9,17 @@ use std::fmt::{self, Debug};
 use std::ops::Index;
 use std::sync::Arc;
 
-/// Declared resource requirements of an isolated-layer effect pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Resource requirements of one isolated-layer effect pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Requirements {
-    passes: usize,
     backdrop: bool,
     writes_every_pixel: bool,
 }
 
 impl Requirements {
-    /// Creates backdrop-free requirements for an ordered number of passes.
-    ///
-    /// The pass count is not clamped. Pass indices are local to the effect and
-    /// use [`usize`] throughout the effect API.
-    pub const fn passes(passes: usize) -> Self {
+    /// Creates requirements with no backdrop or output-initialization guarantee.
+    pub const fn new() -> Self {
         Self {
-            passes,
             backdrop: false,
             writes_every_pixel: false,
         }
@@ -36,15 +31,15 @@ impl Requirements {
         self
     }
 
-    /// Declares that the effect initializes every output pixel.
+    /// Declares that the pass initializes every output pixel.
+    ///
+    /// The guarantee must hold for every pipeline or target-dependent algorithm
+    /// this descriptor may select. It lets the renderer skip its default
+    /// transparent clear; an explicit clear encoded by the pass also satisfies
+    /// the guarantee.
     pub const fn writes_every_pixel(mut self) -> Self {
         self.writes_every_pixel = true;
         self
-    }
-
-    /// Returns the declared pass count.
-    pub const fn pass_count(self) -> usize {
-        self.passes
     }
 
     /// Returns whether a parent-prefix snapshot is required.
@@ -91,27 +86,33 @@ pub struct TextureViews<'a> {
     pub stage_input: &'a wgpu::TextureView,
     /// The declared parent-prefix snapshot, when requested.
     pub backdrop: Option<&'a wgpu::TextureView>,
-    /// The output of the preceding local pass, or `stage_input` for pass zero.
+    /// The output of the preceding local pass, or `stage_input` for the first pass.
     pub previous: &'a wgpu::TextureView,
     /// The dedicated output of this pass.
     pub output: &'a wgpu::TextureView,
 }
 
-/// Plain frame data describing one stage in an isolated-layer effect stack.
+/// Plain data describing one stage in an isolated-layer effect stack.
 ///
-/// All pixel-affecting values observed through this trait—including requirements,
-/// expansion, translation behavior, contributed inputs, and external resources—must
-/// remain stable from input-evidence collection through preparation and encoding. A
-/// mutable external resource must contribute stable identity plus a monotonic revision.
-/// The renderer recollects evidence before retaining rendered pixels; this prevents a
-/// changed candidate from entering the output cache, but it cannot make unrevisioned
-/// interior mutation or an arbitrary change-and-revert sequence safe.
+/// [`Effect::new`] invokes [`LayerEffect::plan`] exactly once and freezes the
+/// resulting pass sequence, each pass's requirements, the expansion, and
+/// translation behavior. Construct a replacement [`Effect`] to change any of
+/// those values. Mutable pixel inputs may still be described by
+/// [`LayerEffect::record_inputs`] using stable identity plus a monotonic revision,
+/// or may opt out of output caching by marking their inputs volatile.
+///
+/// The count-based API was replaced directly. See the
+/// [isolated-layer effect migration guide](https://github.com/iced-rs/iced/blob/master/docs/isolated-layer-effect-migration.md)
+/// for a complete custom-effect example and the lifetime rules.
 pub trait LayerEffect: Debug + Clone + PartialEq + MaybeSend + MaybeSync + 'static {
-    /// Renderer-local prepared resources for one pass of this effect instance.
-    type PreparedPass: Any + MaybeSend + MaybeSync;
-
-    /// Declares all targets and parent-prefix dependencies before allocation.
-    fn requirements(&self) -> Requirements;
+    /// Builds the ordered executable pass plan for this effect.
+    ///
+    /// The plan is CPU-only and construction-time immutable. Adding a pass is
+    /// authoritative: the renderer derives allocation, preparation, encoding,
+    /// cache evidence, and final-output selection from the registered entries.
+    fn plan(&self, plan: &mut Plan<'_, Self>)
+    where
+        Self: Sized;
 
     /// Returns the capture expansion around the widget bounds.
     ///
@@ -142,32 +143,110 @@ pub trait LayerEffect: Debug + Clone + PartialEq + MaybeSend + MaybeSync + 'stat
     fn is_translation_invariant(&self) -> bool {
         false
     }
+}
 
-    /// Prepares renderer-local resources for one declared pass.
-    fn prepare_pass(
+/// One logical texture-to-texture operation in an isolated-layer effect plan.
+///
+/// A pass receives one dedicated full-size renderer output. Its prepared state
+/// may own supplementary GPU resources, and [`Pass::encode`] may encode multiple
+/// render or compute operations through the raw command encoder. The pass must
+/// leave its supplied output fully valid when encoding returns.
+///
+/// Supplementary resources are private to the pass: the renderer does not pool,
+/// budget, initialize, validate dependencies for, or report their internal GPU
+/// operations. Put per-application ownership in [`Pass::Prepared`], initialize
+/// every sampled region, and write the final result into [`TextureViews::output`].
+///
+/// A descriptor should contain owned, immutable, comparable configuration only.
+/// Its construction-time clone becomes cache evidence. If it refers to mutable
+/// external pixel inputs, the enclosing effect must record their revisions or
+/// mark itself volatile through [`LayerEffect::record_inputs`].
+pub trait Pass<E: LayerEffect>:
+    Debug + Clone + PartialEq + MaybeSend + MaybeSync + 'static
+{
+    /// Renderer-local resources prepared for this pass.
+    ///
+    /// The value is retained through encoding and dropped before the renderer
+    /// returns this application's transient targets to its pool. It may own
+    /// textures, views, bind groups, buffers, and an internal operation schedule.
+    type Prepared: Any + MaybeSend + MaybeSync;
+
+    /// Returns this pass's frozen backdrop and output-initialization requirements.
+    ///
+    /// This method runs when the descriptor is added to the construction-time
+    /// plan. Its answer must cover every compatible choice made later from
+    /// [`Context`] or device capabilities.
+    fn requirements(&self, _effect: &E) -> Requirements {
+        Requirements::new()
+    }
+
+    /// Prepares renderer-local resources for this pass.
+    fn prepare(
         &self,
+        effect: &E,
         pipelines: &mut PipelineRegistry<'_>,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        pass: usize,
         context: &Context,
         views: TextureViews<'_>,
-    ) -> Self::PreparedPass;
+    ) -> Self::Prepared;
 
-    /// Encodes one declared pass.
+    /// Encodes this pass.
     ///
     /// `views.output` is dedicated to this pass and never aliases an input.
-    /// Passes are encoded in increasing order, with pass numbers restarting at
-    /// zero for each effect stage.
-    fn encode_pass(
+    fn encode(
         &self,
+        effect: &E,
         pipelines: &PipelineRegistry<'_>,
-        prepared: &Self::PreparedPass,
+        prepared: &Self::Prepared,
         encoder: &mut wgpu::CommandEncoder,
-        pass: usize,
         context: &Context,
         views: TextureViews<'_>,
     );
+}
+
+/// Construction-only builder for an effect's executable pass sequence.
+pub struct Plan<'a, E: LayerEffect> {
+    effect: &'a E,
+    passes: Vec<PassEntry<E>>,
+}
+
+impl<E: LayerEffect> Plan<'_, E> {
+    /// Appends one owned pass descriptor to the effect plan.
+    ///
+    /// Different calls may use different concrete pass and prepared-resource
+    /// types. Descriptor values are included automatically in output-cache
+    /// evidence once at construction; external mutable resources still belong in
+    /// [`LayerEffect::record_inputs`].
+    pub fn push<P>(&mut self, pass: P)
+    where
+        P: Pass<E>,
+    {
+        let requirements = pass.requirements(self.effect);
+        self.passes.push(PassEntry {
+            requirements,
+            evidence: InputAtom(Arc::new(pass.clone())),
+            pass: Box::new(pass),
+        });
+    }
+}
+
+impl<E: LayerEffect> Debug for Plan<'_, E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Plan")
+            .field("passes", &self.passes)
+            .finish_non_exhaustive()
+    }
+}
+
+fn build_plan<E: LayerEffect>(effect: &E) -> Vec<PassEntry<E>> {
+    let mut plan = Plan {
+        effect,
+        passes: Vec::new(),
+    };
+    effect.plan(&mut plan);
+    plan.passes
 }
 
 /// Records retained, directly comparable snapshots of effect inputs.
@@ -314,17 +393,28 @@ where
 pub struct Effect(Arc<dyn Stored>);
 
 impl Effect {
-    /// Erases one concrete effect value while retaining it for recollection.
+    /// Builds and erases one concrete effect while retaining it for recollection.
     pub fn new(effect: impl LayerEffect) -> Self {
-        Self(Arc::new(BlackBox(effect)))
+        let expansion = effect.expansion();
+        let translation_invariant = effect.is_translation_invariant();
+        let passes = build_plan(&effect);
+        let requirements = summarize_requirements(passes.iter().map(|entry| entry.requirements));
+
+        Self(Arc::new(BlackBox {
+            effect,
+            passes,
+            requirements,
+            expansion,
+            translation_invariant,
+        }))
     }
 
-    /// Returns the effect's declared pass and texture requirements.
+    /// Returns the requirements derived from this effect's stored passes.
     pub fn requirements(&self) -> Requirements {
         self.0.requirements()
     }
 
-    /// Returns the effect's declared capture expansion.
+    /// Returns the effect's construction-time capture expansion.
     pub fn expansion(&self) -> Padding {
         self.0.expansion()
     }
@@ -334,9 +424,17 @@ impl Effect {
         self.0.contribute_inputs(inputs);
     }
 
-    /// Returns whether the effect declares itself translation invariant.
+    /// Returns the effect's construction-time translation behavior.
     pub fn is_translation_invariant(&self) -> bool {
         self.0.is_translation_invariant()
+    }
+
+    pub(crate) fn passes_len(&self) -> usize {
+        self.0.passes_len()
+    }
+
+    pub(crate) fn pass_requirements(&self, pass: usize) -> Requirements {
+        self.0.pass_requirements(pass)
     }
 
     pub(crate) fn stored(&self) -> &dyn Stored {
@@ -420,26 +518,14 @@ impl EffectStack {
 
     /// Returns a conservative aggregate requirement summary.
     ///
-    /// Pass counts are added without an isolated-layer-specific cap. Backdrop
-    /// use is the union of the stages. Full overwrite is true only when every
-    /// stage declares it and the stack is nonempty.
+    /// Backdrop use is the union of every stored pass. Full overwrite is true
+    /// only when at least one pass exists and every pass guarantees it.
     pub fn requirements(&self) -> Requirements {
-        let mut passes = 0;
-        let mut backdrop = false;
-        let mut writes_every_pixel = !self.effects.is_empty();
-
-        for effect in &self.effects {
-            let requirements = effect.requirements();
-            passes += requirements.pass_count();
-            backdrop |= requirements.needs_backdrop();
-            writes_every_pixel &= requirements.fully_overwrites();
-        }
-
-        Requirements {
-            passes,
-            backdrop,
-            writes_every_pixel,
-        }
+        summarize_requirements(
+            self.effects.iter().flat_map(|effect| {
+                (0..effect.passes_len()).map(|pass| effect.pass_requirements(pass))
+            }),
+        )
     }
 
     /// Returns the canonical component-wise sum of every stage's expansion.
@@ -489,11 +575,19 @@ impl EffectStack {
             inputs.record(&FrameworkInput::Stage {
                 index,
                 effect_type: effect.stored().effect_type_id(),
-                requirements: effect.requirements(),
                 expansion: expansion_bits(expansion),
                 translation_invariant: effect.is_translation_invariant(),
             });
             effect.contribute_inputs(&mut inputs);
+            for pass in 0..effect.passes_len() {
+                inputs.record(&FrameworkInput::Pass {
+                    index: pass,
+                    pass_type: effect.stored().pass_type_id(pass),
+                    requirements: effect.pass_requirements(pass),
+                });
+                effect.stored().contribute_pass_inputs(pass, &mut inputs);
+                inputs.record(&FrameworkInput::EndPass { index: pass });
+            }
             inputs.record(&FrameworkInput::EndStage { index });
         }
 
@@ -508,6 +602,23 @@ impl EffectStack {
     /// Recollects the stack and compares it with an earlier stable snapshot.
     pub fn inputs_match(&self, recorded: &LayerInputEvidence) -> bool {
         recorded.matches(&self.recollect_input_evidence())
+    }
+}
+
+fn summarize_requirements(requirements: impl IntoIterator<Item = Requirements>) -> Requirements {
+    let mut has_passes = false;
+    let mut backdrop = false;
+    let mut writes_every_pixel = true;
+
+    for requirements in requirements {
+        has_passes = true;
+        backdrop |= requirements.needs_backdrop();
+        writes_every_pixel &= requirements.fully_overwrites();
+    }
+
+    Requirements {
+        backdrop,
+        writes_every_pixel: has_passes && writes_every_pixel,
     }
 }
 
@@ -587,7 +698,7 @@ fn expansion_bits(expansion: Padding) -> [u32; 4] {
     ]
 }
 
-const INPUT_SCHEMA: u32 = 1;
+const INPUT_SCHEMA: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum FrameworkInput {
@@ -598,9 +709,16 @@ enum FrameworkInput {
     Stage {
         index: usize,
         effect_type: TypeId,
-        requirements: Requirements,
         expansion: [u32; 4],
         translation_invariant: bool,
+    },
+    Pass {
+        index: usize,
+        pass_type: TypeId,
+        requirements: Requirements,
+    },
+    EndPass {
+        index: usize,
     },
     EndStage {
         index: usize,
@@ -764,14 +882,89 @@ impl Layer {
     }
 }
 
+#[derive(Debug)]
+struct PassEntry<E: LayerEffect> {
+    requirements: Requirements,
+    evidence: InputAtom,
+    pass: Box<dyn StoredPass<E>>,
+}
+
+trait StoredPass<E: LayerEffect>: Debug + MaybeSend + MaybeSync {
+    fn pass_type_id(&self) -> TypeId;
+
+    fn prepare(
+        &self,
+        effect: &E,
+        pipelines: &mut PipelineRegistry<'_>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        context: &Context,
+        views: TextureViews<'_>,
+    ) -> Box<dyn Erased>;
+
+    fn encode(
+        &self,
+        effect: &E,
+        pipelines: &PipelineRegistry<'_>,
+        prepared: &dyn Erased,
+        encoder: &mut wgpu::CommandEncoder,
+        context: &Context,
+        views: TextureViews<'_>,
+    );
+}
+
+impl<E, P> StoredPass<E> for P
+where
+    E: LayerEffect,
+    P: Pass<E>,
+{
+    fn pass_type_id(&self) -> TypeId {
+        TypeId::of::<P>()
+    }
+
+    fn prepare(
+        &self,
+        effect: &E,
+        pipelines: &mut PipelineRegistry<'_>,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        context: &Context,
+        views: TextureViews<'_>,
+    ) -> Box<dyn Erased> {
+        Box::new(Pass::prepare(
+            self, effect, pipelines, device, queue, context, views,
+        ))
+    }
+
+    fn encode(
+        &self,
+        effect: &E,
+        pipelines: &PipelineRegistry<'_>,
+        prepared: &dyn Erased,
+        encoder: &mut wgpu::CommandEncoder,
+        context: &Context,
+        views: TextureViews<'_>,
+    ) {
+        let prepared = prepared
+            .as_any()
+            .downcast_ref::<P::Prepared>()
+            .expect("isolated-layer prepared resources must match their pass descriptor");
+        Pass::encode(self, effect, pipelines, prepared, encoder, context, views);
+    }
+}
+
 pub(crate) trait Stored: Debug + MaybeSend + MaybeSync {
     fn effect_type_id(&self) -> TypeId;
     fn requirements(&self) -> Requirements;
     fn expansion(&self) -> Padding;
     fn contribute_inputs(&self, inputs: &mut LayerInputRecords);
     fn is_translation_invariant(&self) -> bool;
+    fn passes_len(&self) -> usize;
+    fn pass_requirements(&self, pass: usize) -> Requirements;
+    fn pass_type_id(&self, pass: usize) -> TypeId;
+    fn contribute_pass_inputs(&self, pass: usize, inputs: &mut LayerInputRecords);
 
-    fn prepare_pass(
+    fn prepare(
         &self,
         storage: &mut Storage,
         device: &wgpu::Device,
@@ -782,7 +975,7 @@ pub(crate) trait Stored: Debug + MaybeSend + MaybeSync {
         views: TextureViews<'_>,
     ) -> Box<dyn Erased>;
 
-    fn encode_pass(
+    fn encode(
         &self,
         storage: &Storage,
         device: &wgpu::Device,
@@ -797,7 +990,13 @@ pub(crate) trait Stored: Debug + MaybeSend + MaybeSync {
 }
 
 #[derive(Debug)]
-struct BlackBox<E: LayerEffect>(E);
+struct BlackBox<E: LayerEffect> {
+    effect: E,
+    passes: Vec<PassEntry<E>>,
+    requirements: Requirements,
+    expansion: Padding,
+    translation_invariant: bool,
+}
 
 impl<E: LayerEffect> Stored for BlackBox<E> {
     fn effect_type_id(&self) -> TypeId {
@@ -805,22 +1004,38 @@ impl<E: LayerEffect> Stored for BlackBox<E> {
     }
 
     fn requirements(&self) -> Requirements {
-        self.0.requirements()
+        self.requirements
     }
 
     fn expansion(&self) -> Padding {
-        self.0.expansion()
+        self.expansion
     }
 
     fn contribute_inputs(&self, inputs: &mut LayerInputRecords) {
-        self.0.record_inputs(inputs);
+        self.effect.record_inputs(inputs);
     }
 
     fn is_translation_invariant(&self) -> bool {
-        self.0.is_translation_invariant()
+        self.translation_invariant
     }
 
-    fn prepare_pass(
+    fn passes_len(&self) -> usize {
+        self.passes.len()
+    }
+
+    fn pass_requirements(&self, pass: usize) -> Requirements {
+        self.passes[pass].requirements
+    }
+
+    fn pass_type_id(&self, pass: usize) -> TypeId {
+        self.passes[pass].pass.pass_type_id()
+    }
+
+    fn contribute_pass_inputs(&self, pass: usize, inputs: &mut LayerInputRecords) {
+        inputs.atoms.push(self.passes[pass].evidence.clone());
+    }
+
+    fn prepare(
         &self,
         storage: &mut Storage,
         device: &wgpu::Device,
@@ -836,13 +1051,12 @@ impl<E: LayerEffect> Stored for BlackBox<E> {
             queue,
             format,
         };
-        Box::new(
-            self.0
-                .prepare_pass(&mut pipelines, device, queue, pass, context, views),
-        )
+        self.passes[pass]
+            .pass
+            .prepare(&self.effect, &mut pipelines, device, queue, context, views)
     }
 
-    fn encode_pass(
+    fn encode(
         &self,
         storage: &Storage,
         device: &wgpu::Device,
@@ -860,12 +1074,9 @@ impl<E: LayerEffect> Stored for BlackBox<E> {
             queue,
             format,
         };
-        let prepared = prepared
-            .as_any()
-            .downcast_ref::<E::PreparedPass>()
-            .expect("isolated-layer prepared pass resources");
-        self.0
-            .encode_pass(&pipelines, prepared, encoder, pass, context, views);
+        self.passes[pass]
+            .pass
+            .encode(&self.effect, &pipelines, prepared, encoder, context, views);
     }
 }
 
@@ -932,6 +1143,8 @@ pub(crate) fn context(context: &super::Context, content_bounds: Rectangle) -> Co
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
     #[derive(Debug, Clone, PartialEq)]
     struct First(u8);
@@ -945,39 +1158,93 @@ mod tests {
         value_b_two_dimensional: [f32; 2],
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct TestPass {
+        id: usize,
+        requirements: Requirements,
+    }
+
+    impl TestPass {
+        fn new(id: usize) -> Self {
+            Self {
+                id,
+                requirements: Requirements::new().writes_every_pixel(),
+            }
+        }
+    }
+
+    impl<E: LayerEffect> Pass<E> for TestPass {
+        type Prepared = usize;
+
+        fn requirements(&self, _effect: &E) -> Requirements {
+            self.requirements
+        }
+
+        fn prepare(
+            &self,
+            _effect: &E,
+            _pipelines: &mut PipelineRegistry<'_>,
+            _device: &wgpu::Device,
+            _queue: &wgpu::Queue,
+            _context: &Context,
+            _views: TextureViews<'_>,
+        ) -> Self::Prepared {
+            self.id
+        }
+
+        fn encode(
+            &self,
+            _effect: &E,
+            _pipelines: &PipelineRegistry<'_>,
+            prepared: &Self::Prepared,
+            _encoder: &mut wgpu::CommandEncoder,
+            _context: &Context,
+            _views: TextureViews<'_>,
+        ) {
+            assert_eq!(*prepared, self.id);
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct AlternatePass(u16);
+
+    impl<E: LayerEffect> Pass<E> for AlternatePass {
+        type Prepared = u16;
+
+        fn prepare(
+            &self,
+            _effect: &E,
+            _pipelines: &mut PipelineRegistry<'_>,
+            _device: &wgpu::Device,
+            _queue: &wgpu::Queue,
+            _context: &Context,
+            _views: TextureViews<'_>,
+        ) -> Self::Prepared {
+            self.0
+        }
+
+        fn encode(
+            &self,
+            _effect: &E,
+            _pipelines: &PipelineRegistry<'_>,
+            prepared: &Self::Prepared,
+            _encoder: &mut wgpu::CommandEncoder,
+            _context: &Context,
+            _views: TextureViews<'_>,
+        ) {
+            assert_eq!(*prepared, self.0);
+        }
+    }
+
     macro_rules! test_effect {
         ($effect:ty) => {
             impl LayerEffect for $effect {
-                type PreparedPass = ();
-
-                fn requirements(&self) -> Requirements {
-                    Requirements::passes(1).writes_every_pixel()
+                fn plan(&self, plan: &mut Plan<'_, Self>) {
+                    plan.push(TestPass::new(0));
                 }
 
                 fn is_translation_invariant(&self) -> bool {
                     true
-                }
-
-                fn prepare_pass(
-                    &self,
-                    _pipelines: &mut PipelineRegistry<'_>,
-                    _device: &wgpu::Device,
-                    _queue: &wgpu::Queue,
-                    _pass: usize,
-                    _context: &Context,
-                    _views: TextureViews<'_>,
-                ) {
-                }
-
-                fn encode_pass(
-                    &self,
-                    _pipelines: &PipelineRegistry<'_>,
-                    _prepared: &Self::PreparedPass,
-                    _encoder: &mut wgpu::CommandEncoder,
-                    _pass: usize,
-                    _context: &Context,
-                    _views: TextureViews<'_>,
-                ) {
                 }
             }
         };
@@ -997,20 +1264,19 @@ mod tests {
     }
 
     impl LayerEffect for Configurable {
-        type PreparedPass = ();
-
-        fn requirements(&self) -> Requirements {
-            let requirements = Requirements::passes(self.passes);
-            let requirements = if self.backdrop {
-                requirements.with_backdrop()
-            } else {
-                requirements
-            };
-
-            if self.overwrites {
-                requirements.writes_every_pixel()
-            } else {
-                requirements
+        fn plan(&self, plan: &mut Plan<'_, Self>) {
+            for id in 0..self.passes {
+                let requirements = if self.backdrop {
+                    Requirements::new().with_backdrop()
+                } else {
+                    Requirements::new()
+                };
+                let requirements = if self.overwrites {
+                    requirements.writes_every_pixel()
+                } else {
+                    requirements
+                };
+                plan.push(TestPass { id, requirements });
             }
         }
 
@@ -1021,70 +1287,148 @@ mod tests {
         fn is_translation_invariant(&self) -> bool {
             self.translation_invariant
         }
-
-        fn prepare_pass(
-            &self,
-            _pipelines: &mut PipelineRegistry<'_>,
-            _device: &wgpu::Device,
-            _queue: &wgpu::Queue,
-            _pass: usize,
-            _context: &Context,
-            _views: TextureViews<'_>,
-        ) {
-        }
-
-        fn encode_pass(
-            &self,
-            _pipelines: &PipelineRegistry<'_>,
-            _prepared: &Self::PreparedPass,
-            _encoder: &mut wgpu::CommandEncoder,
-            _pass: usize,
-            _context: &Context,
-            _views: TextureViews<'_>,
-        ) {
-        }
     }
 
     #[derive(Debug, Clone, PartialEq)]
     struct RevisionEffect(isolated_layer::ContentChangeHandle);
 
     impl LayerEffect for RevisionEffect {
-        type PreparedPass = ();
-
-        fn requirements(&self) -> Requirements {
-            Requirements::passes(1)
+        fn plan(&self, plan: &mut Plan<'_, Self>) {
+            plan.push(TestPass {
+                id: 0,
+                requirements: Requirements::new(),
+            });
         }
 
         fn record_inputs(&self, inputs: &mut LayerInputRecords) {
             inputs.depend_on(&self.0);
         }
+    }
 
-        fn prepare_pass(
+    #[derive(Debug, Clone, PartialEq)]
+    struct MixedPlan {
+        reverse: bool,
+        value: usize,
+    }
+
+    impl LayerEffect for MixedPlan {
+        fn plan(&self, plan: &mut Plan<'_, Self>) {
+            if self.reverse {
+                plan.push(AlternatePass(9));
+                plan.push(TestPass::new(self.value));
+            } else {
+                plan.push(TestPass::new(self.value));
+                plan.push(AlternatePass(9));
+            }
+        }
+
+        fn record_inputs(&self, inputs: &mut LayerInputRecords) {
+            inputs.record(&());
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct FrozenEffect {
+        plan_calls: Arc<AtomicUsize>,
+        passes: Arc<AtomicUsize>,
+        backdrop: Arc<AtomicBool>,
+        expansion_bits: Arc<AtomicU32>,
+        translation_invariant: Arc<AtomicBool>,
+    }
+
+    impl PartialEq for FrozenEffect {
+        fn eq(&self, other: &Self) -> bool {
+            self.passes.load(Ordering::Relaxed) == other.passes.load(Ordering::Relaxed)
+                && self.backdrop.load(Ordering::Relaxed) == other.backdrop.load(Ordering::Relaxed)
+                && self.expansion_bits.load(Ordering::Relaxed)
+                    == other.expansion_bits.load(Ordering::Relaxed)
+                && self.translation_invariant.load(Ordering::Relaxed)
+                    == other.translation_invariant.load(Ordering::Relaxed)
+        }
+    }
+
+    impl LayerEffect for FrozenEffect {
+        fn plan(&self, plan: &mut Plan<'_, Self>) {
+            let _ = self.plan_calls.fetch_add(1, Ordering::Relaxed);
+            let requirements = if self.backdrop.load(Ordering::Relaxed) {
+                Requirements::new().with_backdrop()
+            } else {
+                Requirements::new()
+            };
+
+            for id in 0..self.passes.load(Ordering::Relaxed) {
+                plan.push(TestPass { id, requirements });
+            }
+        }
+
+        fn expansion(&self) -> Padding {
+            Padding::new(f32::from_bits(self.expansion_bits.load(Ordering::Relaxed)))
+        }
+
+        fn record_inputs(&self, inputs: &mut LayerInputRecords) {
+            inputs.record(&());
+        }
+
+        fn is_translation_invariant(&self) -> bool {
+            self.translation_invariant.load(Ordering::Relaxed)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct CompoundEffect;
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct CompoundPass;
+
+    struct CompoundPrepared {
+        _textures: Vec<wgpu::Texture>,
+    }
+
+    impl LayerEffect for CompoundEffect {
+        fn plan(&self, plan: &mut Plan<'_, Self>) {
+            plan.push(CompoundPass);
+        }
+    }
+
+    impl Pass<CompoundEffect> for CompoundPass {
+        type Prepared = CompoundPrepared;
+
+        fn prepare(
             &self,
+            _effect: &CompoundEffect,
             _pipelines: &mut PipelineRegistry<'_>,
             _device: &wgpu::Device,
             _queue: &wgpu::Queue,
-            _pass: usize,
             _context: &Context,
             _views: TextureViews<'_>,
-        ) {
+        ) -> Self::Prepared {
+            CompoundPrepared {
+                _textures: Vec::new(),
+            }
         }
 
-        fn encode_pass(
+        fn encode(
             &self,
+            _effect: &CompoundEffect,
             _pipelines: &PipelineRegistry<'_>,
-            _prepared: &Self::PreparedPass,
-            _encoder: &mut wgpu::CommandEncoder,
-            _pass: usize,
+            _prepared: &Self::Prepared,
+            encoder: &mut wgpu::CommandEncoder,
             _context: &Context,
             _views: TextureViews<'_>,
         ) {
+            let _: &mut wgpu::CommandEncoder = encoder;
         }
     }
 
     #[test]
-    fn pass_counts_are_not_clamped() {
-        assert_eq!(Requirements::passes(usize::MAX).pass_count(), usize::MAX);
+    fn requirements_default_to_no_backdrop_and_renderer_initialization() {
+        let requirements = Requirements::new();
+
+        assert_eq!(requirements, Requirements::default());
+        assert!(!requirements.needs_backdrop());
+        assert!(!requirements.fully_overwrites());
+        assert!(requirements.with_backdrop().needs_backdrop());
+        assert!(requirements.writes_every_pixel().fully_overwrites());
     }
 
     #[test]
@@ -1125,6 +1469,121 @@ mod tests {
     }
 
     #[test]
+    fn plan_structure_and_descriptor_values_are_automatic_evidence() {
+        let baseline = EffectStack::from_effect(MixedPlan {
+            reverse: false,
+            value: 7,
+        });
+        let equivalent = EffectStack::from_effect(MixedPlan {
+            reverse: false,
+            value: 7,
+        });
+        let changed_value = EffectStack::from_effect(MixedPlan {
+            reverse: false,
+            value: 8,
+        });
+        let changed_order = EffectStack::from_effect(MixedPlan {
+            reverse: true,
+            value: 7,
+        });
+
+        assert!(
+            baseline
+                .input_evidence()
+                .matches(&equivalent.input_evidence())
+        );
+        assert_ne!(baseline.input_evidence(), changed_value.input_evidence());
+        assert_ne!(baseline.input_evidence(), changed_order.input_evidence());
+        assert_eq!(baseline[0].passes_len(), 2);
+        assert_eq!(
+            baseline[0].stored().pass_type_id(0),
+            TypeId::of::<TestPass>()
+        );
+        assert_eq!(
+            baseline[0].stored().pass_type_id(1),
+            TypeId::of::<AlternatePass>()
+        );
+    }
+
+    #[test]
+    fn compound_passes_can_own_textures_and_receive_a_raw_encoder() {
+        let effect = Effect::new(CompoundEffect);
+
+        assert_eq!(effect.passes_len(), 1);
+        assert_eq!(
+            effect.stored().pass_type_id(0),
+            TypeId::of::<CompoundPass>()
+        );
+    }
+
+    #[test]
+    fn effect_new_freezes_the_plan_and_early_metadata_once() {
+        let plan_calls = Arc::new(AtomicUsize::new(0));
+        let passes = Arc::new(AtomicUsize::new(2));
+        let backdrop = Arc::new(AtomicBool::new(true));
+        let expansion_bits = Arc::new(AtomicU32::new(3.0f32.to_bits()));
+        let translation_invariant = Arc::new(AtomicBool::new(true));
+        let source = FrozenEffect {
+            plan_calls: Arc::clone(&plan_calls),
+            passes: Arc::clone(&passes),
+            backdrop: Arc::clone(&backdrop),
+            expansion_bits: Arc::clone(&expansion_bits),
+            translation_invariant: Arc::clone(&translation_invariant),
+        };
+        let effect = Effect::new(source.clone());
+
+        assert_eq!(plan_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(effect.passes_len(), 2);
+        assert!(effect.requirements().needs_backdrop());
+        assert_eq!(effect.expansion(), Padding::new(3.0));
+        assert!(effect.is_translation_invariant());
+        let frozen_stack = EffectStack::from_iter([effect.clone()]);
+        let frozen_evidence = frozen_stack.input_evidence();
+
+        passes.store(4, Ordering::Relaxed);
+        backdrop.store(false, Ordering::Relaxed);
+        expansion_bits.store(9.0f32.to_bits(), Ordering::Relaxed);
+        translation_invariant.store(false, Ordering::Relaxed);
+
+        assert!(frozen_evidence.matches(&frozen_stack.input_evidence()));
+
+        let cloned = effect.clone();
+        let stack = EffectStack::from_iter([effect, cloned]);
+        let _ = stack.input_evidence();
+        let _ = stack.recollect_input_evidence();
+        assert_eq!(plan_calls.load(Ordering::Relaxed), 1);
+        assert_eq!(stack[0].passes_len(), 2);
+        assert!(stack[0].requirements().needs_backdrop());
+        assert_eq!(stack[0].expansion(), Padding::new(3.0));
+        assert!(stack[0].is_translation_invariant());
+
+        let replacement = Effect::new(source);
+        assert_eq!(plan_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(replacement.passes_len(), 4);
+        assert!(!replacement.requirements().needs_backdrop());
+        assert_eq!(replacement.expansion(), Padding::new(9.0));
+        assert!(!replacement.is_translation_invariant());
+    }
+
+    #[test]
+    fn empty_stage_retains_stage_metadata_without_requirements() {
+        let stage = Configurable {
+            passes: 0,
+            backdrop: true,
+            overwrites: true,
+            expansion: Padding::new(4.0),
+            translation_invariant: true,
+        };
+        let stack = EffectStack::from_effect(stage);
+
+        assert_eq!(stack[0].passes_len(), 0);
+        assert_eq!(stack[0].requirements(), Requirements::new());
+        assert_eq!(stack.expansion(), Some(Padding::new(4.0)));
+        assert!(stack.is_translation_invariant());
+        assert_ne!(stack.input_evidence(), EffectStack::new().input_evidence());
+    }
+
+    #[test]
     fn evidence_uses_normal_floating_point_semantics() {
         fn evidence(value: f32) -> LayerInputEvidence {
             let mut inputs = LayerInputRecords::new();
@@ -1156,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    fn framework_evidence_captures_declared_stage_metadata() {
+    fn framework_evidence_captures_frozen_stage_and_pass_metadata() {
         fn evidence(
             passes: usize,
             backdrop: bool,
@@ -1227,14 +1686,13 @@ mod tests {
 
         let stages: Vec<_> = stack.stage_requirements().collect();
         assert_eq!(stages.len(), 2);
-        assert_eq!(stages[0].pass_count(), 32);
+        assert_eq!(stack[0].passes_len(), 32);
         assert!(stages[0].fully_overwrites());
-        assert_eq!(stages[1].pass_count(), 17);
+        assert_eq!(stack[1].passes_len(), 17);
         assert!(stages[1].needs_backdrop());
         assert!(!stages[1].fully_overwrites());
 
         let aggregate = stack.requirements();
-        assert_eq!(aggregate.pass_count(), 49);
         assert!(aggregate.needs_backdrop());
         assert!(!aggregate.fully_overwrites());
         assert_eq!(

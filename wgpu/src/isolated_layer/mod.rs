@@ -14,7 +14,8 @@ pub(crate) use composite::{
 pub(crate) use context::{CaptureGrid, Context, Placement};
 pub use effect::{
     Context as EffectContext, Effect, EffectStack, Layer, LayerEffect, LayerInputEvidence,
-    LayerInputRecords, Pipeline, PipelineRegistry, Renderer, Requirements, TextureViews,
+    LayerInputRecords, Pass, Pipeline, PipelineRegistry, Plan, Renderer, Requirements,
+    TextureViews,
 };
 pub(crate) use effect::{Storage as LayerEffectStorage, context as effect_context};
 pub(crate) use pool::{Pool, Target};
@@ -82,19 +83,16 @@ pub(crate) struct EffectPassPlan {
 /// output target, while each stage keeps one stable input: the captured child
 /// for the first stage and the preceding stage's final output thereafter.
 pub(crate) fn plan_effect_passes(effects: &EffectStack) -> EffectPassPlan {
-    let stage_requirements: Vec<_> = effects.stage_requirements().collect();
-    let backdrop = stage_requirements
-        .iter()
-        .any(|requirements| requirements.needs_backdrop())
-        .then_some(1);
+    let backdrop = effects.requirements().needs_backdrop().then_some(1);
     let mut next_output = 1 + usize::from(backdrop.is_some());
     let mut current_output = 0;
     let mut passes = Vec::new();
 
-    for (effect, requirements) in stage_requirements.into_iter().enumerate() {
+    for (effect, stage) in effects.iter().enumerate() {
         let stage_input = current_output;
 
-        for pass in 0..requirements.pass_count() {
+        for pass in 0..stage.passes_len() {
+            let requirements = stage.pass_requirements(pass);
             let output = next_output;
             next_output += 1;
             let previous = if pass == 0 { stage_input } else { output - 1 };
@@ -171,7 +169,10 @@ pub struct Diagnostics {
     pub allocations: usize,
     /// Renderer-owned targets reused from the transient pool.
     pub pool_hits: usize,
-    /// Effect passes encoded during the frame.
+    /// Logical effect passes prepared during the frame.
+    ///
+    /// Compound passes count once regardless of how many internal GPU operations
+    /// they encode. A retained-output cache hit contributes zero.
     pub isolated_layer_passes: usize,
     /// Whether a root intermediate was activated for backdrop sampling.
     pub root_intermediate: bool,
@@ -553,32 +554,61 @@ mod tests {
     use crate::core::isolated_layer::SurfaceHandle;
 
     #[derive(Debug, Clone, PartialEq)]
-    struct PlannedStage(effect::Requirements);
+    struct PlannedStage {
+        passes: usize,
+        requirements: effect::Requirements,
+    }
+
+    impl PlannedStage {
+        fn new(passes: usize, requirements: effect::Requirements) -> Self {
+            Self {
+                passes,
+                requirements,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct PlannedPass {
+        pass: usize,
+        requirements: effect::Requirements,
+    }
 
     impl effect::LayerEffect for PlannedStage {
-        type PreparedPass = ();
+        fn plan(&self, plan: &mut effect::Plan<'_, Self>) {
+            for pass in 0..self.passes {
+                plan.push(PlannedPass {
+                    pass,
+                    requirements: self.requirements,
+                });
+            }
+        }
+    }
 
-        fn requirements(&self) -> effect::Requirements {
-            self.0
+    impl effect::Pass<PlannedStage> for PlannedPass {
+        type Prepared = ();
+
+        fn requirements(&self, _effect: &PlannedStage) -> effect::Requirements {
+            self.requirements
         }
 
-        fn prepare_pass(
+        fn prepare(
             &self,
+            _effect: &PlannedStage,
             _pipelines: &mut effect::PipelineRegistry<'_>,
             _device: &wgpu::Device,
             _queue: &wgpu::Queue,
-            _pass: usize,
             _context: &effect::Context,
             _views: effect::TextureViews<'_>,
         ) {
         }
 
-        fn encode_pass(
+        fn encode(
             &self,
+            _effect: &PlannedStage,
             _pipelines: &effect::PipelineRegistry<'_>,
-            _prepared: &Self::PreparedPass,
+            _prepared: &Self::Prepared,
             _encoder: &mut wgpu::CommandEncoder,
-            _pass: usize,
             _context: &effect::Context,
             _views: effect::TextureViews<'_>,
         ) {
@@ -588,14 +618,16 @@ mod tests {
     #[test]
     fn production_pass_plan_chains_stage_outputs_and_scopes_backdrop_per_stage() {
         let effects = EffectStack::new()
-            .with(PlannedStage(effect::Requirements::passes(2)))
-            .with(PlannedStage(
-                effect::Requirements::passes(1)
+            .with(PlannedStage::new(2, effect::Requirements::new()))
+            .with(PlannedStage::new(
+                1,
+                effect::Requirements::new()
                     .with_backdrop()
                     .writes_every_pixel(),
             ))
-            .with(PlannedStage(
-                effect::Requirements::passes(3).writes_every_pixel(),
+            .with(PlannedStage::new(
+                3,
+                effect::Requirements::new().writes_every_pixel(),
             ));
 
         let plan = plan_effect_passes(&effects);
@@ -667,8 +699,8 @@ mod tests {
     #[test]
     fn production_pass_plan_preserves_counts_above_the_legacy_limit() {
         let effects = EffectStack::new()
-            .with(PlannedStage(effect::Requirements::passes(32)))
-            .with(PlannedStage(effect::Requirements::passes(17)));
+            .with(PlannedStage::new(32, effect::Requirements::new()))
+            .with(PlannedStage::new(17, effect::Requirements::new()));
 
         let plan = plan_effect_passes(&effects);
 
@@ -691,6 +723,38 @@ mod tests {
         assert_eq!(plan.backdrop, None);
         assert_eq!(plan.output, 0);
         assert_eq!(plan.target_count, 1);
+    }
+
+    #[test]
+    fn empty_stages_forward_without_targets_or_backdrop() {
+        let effects = EffectStack::new()
+            .with(PlannedStage::new(
+                0,
+                effect::Requirements::new().with_backdrop(),
+            ))
+            .with(PlannedStage::new(1, effect::Requirements::new()))
+            .with(PlannedStage::new(
+                0,
+                effect::Requirements::new().with_backdrop(),
+            ));
+
+        let plan = plan_effect_passes(&effects);
+
+        assert_eq!(plan.backdrop, None);
+        assert_eq!(plan.target_count, 2);
+        assert_eq!(plan.output, 1);
+        assert_eq!(
+            plan.passes,
+            vec![PlannedEffectPass {
+                effect: 1,
+                pass: 0,
+                stage_input: 0,
+                previous: 0,
+                output: 1,
+                uses_backdrop: false,
+                writes_every_pixel: false,
+            }]
+        );
     }
 
     #[test]

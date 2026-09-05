@@ -3,15 +3,7 @@ use crate::renderer::wgpu::shader::isolated_layer::effect as shader;
 use crate::renderer::wgpu::wgpu;
 
 use bytemuck::{Pod, Zeroable};
-use std::any::Any;
 use wgpu::util::DeviceExt;
-
-// Match `LayerEffect`'s platform-specific `MaybeSend` and `MaybeSync` bounds.
-#[cfg(not(target_arch = "wasm32"))]
-pub(super) type PreparedPass = Box<dyn Any + Send + Sync>;
-
-#[cfg(target_arch = "wasm32")]
-pub(super) type PreparedPass = Box<dyn Any>;
 
 pub(super) struct Prepared {
     bind_group: wgpu::BindGroup,
@@ -19,6 +11,12 @@ pub(super) struct Prepared {
 }
 
 pub(super) struct BlurPipeline(pub(super) TexturePipeline);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BlurAxis {
+    Horizontal,
+    Vertical,
+}
 
 pub(super) struct TexturePipeline {
     sampler: wgpu::Sampler,
@@ -187,11 +185,11 @@ pub(super) struct BlurParams {
 }
 
 impl BlurParams {
-    pub(super) fn new(context: &effect::Context, pass: usize, sigma: f32) -> Self {
+    pub(super) fn new(context: &effect::Context, axis: BlurAxis, sigma: f32) -> Self {
         Self::for_input(
             context,
             context.physical_size,
-            pass,
+            axis,
             sigma * context.scale_factor,
         )
     }
@@ -199,14 +197,18 @@ impl BlurParams {
     pub(super) fn for_input(
         context: &effect::Context,
         input_size: crate::core::Size<u32>,
-        pass: usize,
+        axis: BlurAxis,
         sigma: f32,
     ) -> Self {
         Self {
             geometry: geometry_for_size(context, input_size),
             parameters: [
-                if pass == 0 { 1.0 } else { 0.0 },
-                if pass == 0 { 0.0 } else { 1.0 },
+                if axis == BlurAxis::Horizontal {
+                    1.0
+                } else {
+                    0.0
+                },
+                if axis == BlurAxis::Vertical { 1.0 } else { 0.0 },
                 sigma,
                 0.0,
             ],

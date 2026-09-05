@@ -1,10 +1,10 @@
 use super::pipeline::{
-    BlurParams, BlurPipeline, Prepared, PreparedPass, TexturePipeline, sampler_entry,
-    texture_entry, uniform_entry,
+    BlurAxis, BlurParams, BlurPipeline, Prepared, TexturePipeline, sampler_entry, texture_entry,
+    uniform_entry,
 };
 use crate::core::{Color, Padding, Vector};
 use crate::renderer::wgpu::isolated_layer::effect::{
-    self, PipelineRegistry, Requirements, TextureViews,
+    self, PipelineRegistry, Plan, Requirements, TextureViews,
 };
 use crate::renderer::wgpu::shader::isolated_layer::effect as shader;
 use crate::renderer::wgpu::wgpu;
@@ -20,11 +20,6 @@ pub struct DropShadow {
     pub offset: Vector,
     /// The blur radius of the shadow.
     pub blur_radius: f32,
-}
-
-enum Pass {
-    Blur(Prepared),
-    Shadow(Prepared),
 }
 
 struct ShadowPipeline(TexturePipeline);
@@ -47,10 +42,10 @@ impl effect::Pipeline for ShadowPipeline {
 }
 
 impl effect::LayerEffect for DropShadow {
-    type PreparedPass = PreparedPass;
-
-    fn requirements(&self) -> Requirements {
-        Requirements::passes(3).writes_every_pixel()
+    fn plan(&self, plan: &mut Plan<'_, Self>) {
+        plan.push(BlurPass(BlurAxis::Horizontal));
+        plan.push(BlurPass(BlurAxis::Vertical));
+        plan.push(ShadowPass);
     }
 
     fn expansion(&self) -> Padding {
@@ -66,83 +61,105 @@ impl effect::LayerEffect for DropShadow {
     fn is_translation_invariant(&self) -> bool {
         true
     }
+}
 
-    fn prepare_pass(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlurPass(BlurAxis);
+
+impl effect::Pass<DropShadow> for BlurPass {
+    type Prepared = Prepared;
+
+    fn requirements(&self, _effect: &DropShadow) -> Requirements {
+        Requirements::new().writes_every_pixel()
+    }
+
+    fn prepare(
         &self,
+        effect: &DropShadow,
         pipelines: &mut PipelineRegistry<'_>,
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
-        pass: usize,
         context: &effect::Context,
         views: TextureViews<'_>,
-    ) -> PreparedPass {
-        if pass < 2 {
-            let pipeline = pipelines.get_or_init::<BlurPipeline>();
-            let input = if pass == 0 {
-                views.stage_input
-            } else {
-                views.previous
-            };
-            Box::new(Pass::Blur(pipeline.0.prepare(
-                device,
-                "iced_widget.isolated_layer.blur",
-                &BlurParams::new(context, pass, self.blur_radius),
-                &[(0, input)],
-                1,
-                2,
-            )))
-        } else {
-            let pipeline = pipelines.get_or_init::<ShadowPipeline>();
-            Box::new(Pass::Shadow(pipeline.0.prepare(
-                device,
-                "iced_widget.isolated_layer.shadow",
-                &ShadowParams::new(context, *self),
-                &[(0, views.stage_input), (1, views.previous)],
-                2,
-                3,
-            )))
-        }
+    ) -> Prepared {
+        let pipeline = pipelines.get_or_init::<BlurPipeline>();
+        pipeline.0.prepare(
+            device,
+            "iced_widget.isolated_layer.blur",
+            &BlurParams::new(context, self.0, effect.blur_radius),
+            &[(0, views.previous)],
+            1,
+            2,
+        )
     }
 
-    fn encode_pass(
+    fn encode(
         &self,
+        _effect: &DropShadow,
         pipelines: &PipelineRegistry<'_>,
-        prepared: &PreparedPass,
+        prepared: &Prepared,
         encoder: &mut wgpu::CommandEncoder,
-        pass: usize,
         context: &effect::Context,
         views: TextureViews<'_>,
     ) {
-        if pass < 2 {
-            let pipeline = pipelines.get::<BlurPipeline>().expect("blur pipeline");
-            let Pass::Blur(prepared) = prepared.as_ref().downcast_ref::<Pass>().expect("blur pass")
-            else {
-                unreachable!()
-            };
-            pipeline.0.render(
-                encoder,
-                views.output,
-                context.physical_size,
-                "iced_widget.isolated_layer.blur",
-                prepared,
-            );
-        } else {
-            let pipeline = pipelines.get::<ShadowPipeline>().expect("shadow pipeline");
-            let Pass::Shadow(prepared) = prepared
-                .as_ref()
-                .downcast_ref::<Pass>()
-                .expect("shadow pass")
-            else {
-                unreachable!()
-            };
-            pipeline.0.render(
-                encoder,
-                views.output,
-                context.physical_size,
-                "iced_widget.isolated_layer.shadow",
-                prepared,
-            );
-        }
+        let pipeline = pipelines.get::<BlurPipeline>().expect("blur pipeline");
+        pipeline.0.render(
+            encoder,
+            views.output,
+            context.physical_size,
+            "iced_widget.isolated_layer.blur",
+            prepared,
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShadowPass;
+
+impl effect::Pass<DropShadow> for ShadowPass {
+    type Prepared = Prepared;
+
+    fn requirements(&self, _effect: &DropShadow) -> Requirements {
+        Requirements::new().writes_every_pixel()
+    }
+
+    fn prepare(
+        &self,
+        effect: &DropShadow,
+        pipelines: &mut PipelineRegistry<'_>,
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        context: &effect::Context,
+        views: TextureViews<'_>,
+    ) -> Prepared {
+        let pipeline = pipelines.get_or_init::<ShadowPipeline>();
+        pipeline.0.prepare(
+            device,
+            "iced_widget.isolated_layer.shadow",
+            &ShadowParams::new(context, *effect),
+            &[(0, views.stage_input), (1, views.previous)],
+            2,
+            3,
+        )
+    }
+
+    fn encode(
+        &self,
+        _effect: &DropShadow,
+        pipelines: &PipelineRegistry<'_>,
+        prepared: &Prepared,
+        encoder: &mut wgpu::CommandEncoder,
+        context: &effect::Context,
+        views: TextureViews<'_>,
+    ) {
+        let pipeline = pipelines.get::<ShadowPipeline>().expect("shadow pipeline");
+        pipeline.0.render(
+            encoder,
+            views.output,
+            context.physical_size,
+            "iced_widget.isolated_layer.shadow",
+            prepared,
+        );
     }
 }
 

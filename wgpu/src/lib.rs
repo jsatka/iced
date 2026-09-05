@@ -22,6 +22,7 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(missing_docs)]
+#![recursion_limit = "256"]
 pub mod isolated_layer;
 pub mod layer;
 pub mod primitive;
@@ -859,10 +860,9 @@ impl Renderer {
                     context
                         .set_source_geometry(node.logical_surface_size, node.layer.content_bounds);
 
-                    // Snapshot cache evidence before asking the same effect values to build the
-                    // executable plan. If an interior-mutable implementation changes its
-                    // requirements between these observations, store-time recollection rejects
-                    // the candidate instead of publishing pixels produced by a different plan.
+                    // Snapshot the frozen plan structure and current live input revisions before
+                    // cache lookup. Store-time recollection rejects a candidate if mutable inputs
+                    // change while its pixels are being prepared and rendered.
                     let input_evidence = node
                         .layer
                         .output_cache_request
@@ -925,7 +925,7 @@ impl Renderer {
 
                         for planned in &pass_plan.passes {
                             let effect = &node.effects[planned.effect];
-                            let prepared = effect.stored().prepare_pass(
+                            let prepared = effect.stored().prepare(
                                 &mut storage,
                                 &self.engine.device,
                                 &self.engine.queue,
@@ -1269,7 +1269,7 @@ impl Renderer {
                                 );
                             }
 
-                            node.effects[pass.effect].stored().encode_pass(
+                            node.effects[pass.effect].stored().encode(
                                 &storage,
                                 &self.engine.device,
                                 &self.engine.queue,
@@ -1742,6 +1742,7 @@ fn begin_load_pass<'a>(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 

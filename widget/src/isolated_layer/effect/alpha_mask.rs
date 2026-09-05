@@ -1,9 +1,7 @@
 use super::canonical;
-use super::pipeline::{
-    Prepared, PreparedPass, TexturePipeline, sampler_entry, texture_entry, uniform_entry,
-};
+use super::pipeline::{Prepared, TexturePipeline, sampler_entry, texture_entry, uniform_entry};
 use crate::renderer::wgpu::isolated_layer::effect::{
-    self, PipelineRegistry, Requirements, TextureViews,
+    self, PipelineRegistry, Plan, Requirements, TextureViews,
 };
 use crate::renderer::wgpu::shader::isolated_layer::effect as shader;
 use crate::renderer::wgpu::wgpu;
@@ -65,50 +63,55 @@ impl effect::Pipeline for MaskPipeline {
 }
 
 impl effect::LayerEffect for AlphaMask {
-    type PreparedPass = PreparedPass;
-
-    fn requirements(&self) -> Requirements {
-        Requirements::passes(1).writes_every_pixel()
+    fn plan(&self, plan: &mut Plan<'_, Self>) {
+        plan.push(MaskPass);
     }
 
     fn is_translation_invariant(&self) -> bool {
         true
     }
+}
 
-    fn prepare_pass(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MaskPass;
+
+impl effect::Pass<AlphaMask> for MaskPass {
+    type Prepared = Prepared;
+
+    fn requirements(&self, _effect: &AlphaMask) -> Requirements {
+        Requirements::new().writes_every_pixel()
+    }
+
+    fn prepare(
         &self,
+        effect: &AlphaMask,
         pipelines: &mut PipelineRegistry<'_>,
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
-        _pass: usize,
         context: &effect::Context,
         views: TextureViews<'_>,
-    ) -> PreparedPass {
+    ) -> Prepared {
         let pipeline = pipelines.get_or_init::<MaskPipeline>();
-        Box::new(pipeline.0.prepare(
+        pipeline.0.prepare(
             device,
             "iced_widget.isolated_layer.mask",
-            &MaskParams::new(context, *self),
+            &MaskParams::new(context, *effect),
             &[(0, views.stage_input)],
             1,
             2,
-        ))
+        )
     }
 
-    fn encode_pass(
+    fn encode(
         &self,
+        _effect: &AlphaMask,
         pipelines: &PipelineRegistry<'_>,
-        prepared: &PreparedPass,
+        prepared: &Prepared,
         encoder: &mut wgpu::CommandEncoder,
-        _pass: usize,
         context: &effect::Context,
         views: TextureViews<'_>,
     ) {
         let pipeline = pipelines.get::<MaskPipeline>().expect("mask pipeline");
-        let prepared = prepared
-            .as_ref()
-            .downcast_ref::<Prepared>()
-            .expect("mask pass");
         pipeline.0.render(
             encoder,
             views.output,
