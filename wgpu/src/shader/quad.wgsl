@@ -1,6 +1,7 @@
 struct Globals {
     transform: mat4x4<f32>,
     scale: f32,
+    origin: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;

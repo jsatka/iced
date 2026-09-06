@@ -31,7 +31,7 @@ struct GradientVertexOutput {
 fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     var out: GradientVertexOutput;
 
-    var pos: vec2<f32> = input.position_and_scale.xy * globals.scale;
+    var pos: vec2<f32> = (input.position_and_scale.xy - globals.origin) * globals.scale;
     var scale: vec2<f32> = input.position_and_scale.zw * globals.scale;
 
     var pos_snap = vec2<f32>(0.0, 0.0);
@@ -63,7 +63,7 @@ fn gradient_vs_main(input: GradientVertexInput) -> GradientVertexOutput {
     out.colors_3 = input.colors_3;
     out.colors_4 = input.colors_4;
     out.offsets = input.offsets;
-    out.direction = input.direction * globals.scale;
+    out.direction = (input.direction - globals.origin.xyxy) * globals.scale;
     out.position_and_scale = vec4<f32>(pos + pos_snap, scale + scale_snap);
     out.border_color = premultiply(input.border_color);
     out.border_radius = border_radius * globals.scale;

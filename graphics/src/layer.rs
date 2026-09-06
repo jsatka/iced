@@ -101,7 +101,7 @@ impl<T: Layer> Stack<T> {
     ///
     /// The current layer will be recorded for drawing.
     pub fn pop_clip(&mut self) {
-        self.flush();
+        self.flush_current();
 
         self.current = self.previous.pop().unwrap();
     }
@@ -132,9 +132,52 @@ impl<T: Layer> Stack<T> {
         &self.layers[..self.active_count]
     }
 
-    /// Flushes and settles any primitives in the [`Stack`].
+    /// Flushes and settles any primitives in every layer on the open clipping path.
+    ///
+    /// Layers that have already been popped are settled by [`pop_clip`](Self::pop_clip). The
+    /// remaining ancestors and current layer are all settled so callers cannot accidentally
+    /// observe or transfer a partially recorded stack.
     pub fn flush(&mut self) {
+        for &index in &self.previous {
+            self.layers[index].flush();
+        }
+
+        self.flush_current();
+    }
+
+    /// Flushes only the current layer when it is about to be closed.
+    fn flush_current(&mut self) {
         self.layers[self.current].flush();
+    }
+
+    /// Splits the recorded layers at an ordering barrier.
+    ///
+    /// The returned stack contains everything recorded before the split. The current stack is
+    /// replaced with an empty one that preserves the active clipping and transformation state, so
+    /// matching [`pop_clip`](Self::pop_clip) and
+    /// [`pop_transformation`](Self::pop_transformation) calls remain valid after the barrier. All
+    /// layers in the open clipping path are flushed before the recorded prefix is returned.
+    pub fn split(&mut self) -> Self {
+        self.flush();
+
+        let open_depth = self.previous.len();
+        let layers = self
+            .previous
+            .iter()
+            .copied()
+            .chain(std::iter::once(self.current))
+            .map(|index| T::with_bounds(self.layers[index].bounds()))
+            .collect();
+
+        let continuation = Self {
+            layers,
+            transformations: self.transformations.clone(),
+            previous: (0..open_depth).collect(),
+            current: open_depth,
+            active_count: open_depth + 1,
+        };
+
+        std::mem::replace(self, continuation)
     }
 
     /// Performs layer merging wherever possible.
@@ -217,5 +260,228 @@ impl<T: Layer> Stack<T> {
 impl<T: Layer> Default for Stack<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Default)]
+    struct TestLayer {
+        bounds: Rectangle,
+        values: Vec<u8>,
+        pending: Vec<u8>,
+    }
+
+    impl Layer for TestLayer {
+        fn with_bounds(bounds: Rectangle) -> Self {
+            Self {
+                bounds,
+                ..Self::default()
+            }
+        }
+
+        fn bounds(&self) -> Rectangle {
+            self.bounds
+        }
+
+        fn flush(&mut self) {
+            self.values.append(&mut self.pending);
+        }
+
+        fn resize(&mut self, bounds: Rectangle) {
+            self.bounds = bounds;
+        }
+
+        fn reset(&mut self) {
+            self.values.clear();
+            self.pending.clear();
+        }
+
+        fn start(&self) -> usize {
+            usize::from(!self.values.is_empty())
+        }
+
+        fn end(&self) -> usize {
+            usize::from(!self.values.is_empty())
+        }
+
+        fn merge(&mut self, layer: &mut Self) {
+            self.values.append(&mut layer.values);
+        }
+    }
+
+    #[test]
+    fn split_preserves_active_recording_context() {
+        let mut stack = Stack::<TestLayer>::new();
+        let clip = Rectangle::new(
+            crate::core::Point::new(10.0, 20.0),
+            crate::core::Size::new(30.0, 40.0),
+        );
+        let translation = Transformation::translate(4.0, 8.0);
+
+        stack.push_transformation(translation);
+        stack.push_clip(clip);
+        stack.current_mut().0.pending.push(1);
+
+        let settled = stack.split();
+
+        assert_eq!(
+            settled
+                .iter()
+                .flat_map(|layer| &layer.values)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        assert!(stack.iter().all(|layer| layer.values.is_empty()));
+        assert_eq!(stack.transformation(), translation);
+
+        stack.current_mut().0.pending.push(2);
+        stack.pop_clip();
+        stack.pop_transformation();
+
+        assert_eq!(stack.transformation(), Transformation::IDENTITY);
+        assert_eq!(
+            stack
+                .iter()
+                .flat_map(|layer| &layer.values)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
+    #[test]
+    fn split_settles_every_open_layer() {
+        let mut stack = Stack::<TestLayer>::new();
+        let outer = Rectangle::new(
+            crate::core::Point::new(4.0, 6.0),
+            crate::core::Size::new(80.0, 60.0),
+        );
+        let inner = Rectangle::new(
+            crate::core::Point::new(8.0, 10.0),
+            crate::core::Size::new(40.0, 30.0),
+        );
+
+        stack.current_mut().0.pending.push(1);
+        stack.push_clip(outer);
+        stack.current_mut().0.pending.push(2);
+        stack.push_clip(inner);
+        stack.current_mut().0.pending.push(3);
+
+        let settled = stack.split();
+
+        assert_eq!(
+            settled
+                .iter()
+                .flat_map(|layer| &layer.values)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(settled.iter().all(|layer| layer.pending.is_empty()));
+        assert!(
+            stack
+                .iter()
+                .all(|layer| { layer.values.is_empty() && layer.pending.is_empty() })
+        );
+
+        stack.current_mut().0.pending.push(4);
+        stack.pop_clip();
+        stack.current_mut().0.pending.push(5);
+        stack.pop_clip();
+        stack.current_mut().0.pending.push(6);
+        stack.merge();
+
+        assert_eq!(
+            stack
+                .iter()
+                .flat_map(|layer| &layer.values)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![6, 5, 4]
+        );
+    }
+
+    #[test]
+    fn public_flush_settles_every_open_layer() {
+        let mut stack = Stack::<TestLayer>::new();
+        let outer = Rectangle::new(
+            crate::core::Point::new(4.0, 6.0),
+            crate::core::Size::new(80.0, 60.0),
+        );
+        let inner = Rectangle::new(
+            crate::core::Point::new(8.0, 10.0),
+            crate::core::Size::new(40.0, 30.0),
+        );
+
+        stack.current_mut().0.pending.push(1);
+        stack.push_clip(outer);
+        stack.current_mut().0.pending.push(2);
+        stack.push_clip(inner);
+        stack.current_mut().0.pending.push(3);
+
+        stack.flush();
+
+        assert_eq!(
+            stack
+                .iter()
+                .flat_map(|layer| &layer.values)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(stack.iter().all(|layer| layer.pending.is_empty()));
+    }
+
+    #[test]
+    fn split_compacts_the_empty_continuation_to_the_open_path() {
+        let mut stack = Stack::<TestLayer>::new();
+        let closed = Rectangle::new(
+            crate::core::Point::new(1.0, 2.0),
+            crate::core::Size::new(20.0, 20.0),
+        );
+        let outer = Rectangle::new(
+            crate::core::Point::new(4.0, 6.0),
+            crate::core::Size::new(80.0, 60.0),
+        );
+        let inner = Rectangle::new(
+            crate::core::Point::new(8.0, 10.0),
+            crate::core::Size::new(40.0, 30.0),
+        );
+
+        for value in 1..=8 {
+            stack.push_clip(closed);
+            stack.current_mut().0.pending.push(value);
+            stack.pop_clip();
+        }
+
+        stack.push_clip(outer);
+        stack.push_clip(inner);
+
+        let prefix = stack.split();
+
+        assert_eq!(prefix.iter().count(), 11);
+        assert_eq!(stack.iter().count(), 3);
+        assert_eq!(stack.current_mut().0.bounds, inner);
+
+        stack.current_mut().0.pending.push(9);
+        stack.pop_clip();
+        assert_eq!(stack.current_mut().0.bounds, outer);
+        stack.current_mut().0.pending.push(10);
+        stack.pop_clip();
+        stack.current_mut().0.pending.push(11);
+        stack.merge();
+
+        assert_eq!(
+            stack
+                .iter()
+                .flat_map(|layer| &layer.values)
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![11, 10, 9]
+        );
     }
 }

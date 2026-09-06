@@ -29,7 +29,7 @@ struct SolidVertexOutput {
 fn solid_vs_main(input: SolidVertexInput) -> SolidVertexOutput {
     var out: SolidVertexOutput;
 
-    var pos: vec2<f32> = (input.pos + min(input.shadow_offset, vec2<f32>(0.0, 0.0)) - input.shadow_blur_radius) * globals.scale;
+    var pos: vec2<f32> = (input.pos - globals.origin + min(input.shadow_offset, vec2<f32>(0.0, 0.0)) - input.shadow_blur_radius) * globals.scale;
     var scale: vec2<f32> = (input.scale + vec2<f32>(abs(input.shadow_offset.x), abs(input.shadow_offset.y)) + input.shadow_blur_radius * 2.0) * globals.scale;
 
     var pos_snap = vec2<f32>(0.0, 0.0);
@@ -52,7 +52,7 @@ fn solid_vs_main(input: SolidVertexInput) -> SolidVertexOutput {
     out.position = globals.transform * transform * vec4<f32>(vertex_position(input.vertex_index), 0.0, 1.0);
     out.color = premultiply(input.color);
     out.border_color = premultiply(input.border_color);
-    out.pos = input.pos * globals.scale + pos_snap;
+    out.pos = (input.pos - globals.origin) * globals.scale + pos_snap;
     out.scale = input.scale * globals.scale + scale_snap;
     out.border_radius = border_radius * globals.scale;
     out.border_width = input.border_width * globals.scale;

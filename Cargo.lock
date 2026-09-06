@@ -71,6 +71,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "alpha_mask"
+version = "0.1.0"
+dependencies = [
+ "iced",
+]
+
+[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -608,6 +615,13 @@ dependencies = [
  "futures-io",
  "futures-lite",
  "piper",
+]
+
+[[package]]
+name = "blur"
+version = "0.1.0"
+dependencies = [
+ "iced",
 ]
 
 [[package]]
@@ -1335,6 +1349,13 @@ version = "0.1.1"
 source = "git+https://github.com/iced-rs/winit.git?rev=05b8ff17a06562f0a10bb46e6eaacbe2a95cb5ed#05b8ff17a06562f0a10bb46e6eaacbe2a95cb5ed"
 
 [[package]]
+name = "drop_shadow"
+version = "0.1.0"
+dependencies = [
+ "iced",
+]
+
+[[package]]
 name = "dtor"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1989,6 +2010,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "group_opacity"
+version = "0.1.0"
+dependencies = [
+ "iced",
+]
+
+[[package]]
 name = "guillotiere"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2475,9 +2503,12 @@ dependencies = [
 name = "iced_widget"
 version = "0.15.0-dev"
 dependencies = [
+ "bytemuck",
+ "futures",
  "iced_highlighter",
  "iced_renderer",
  "iced_runtime",
+ "iced_wgpu",
  "log",
  "num-traits",
  "pulldown-cmark",

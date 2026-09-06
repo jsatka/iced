@@ -1,4 +1,4 @@
-use glam::{mat4, vec3, vec4};
+use glam::vec3;
 use iced::Rectangle;
 
 #[derive(Copy, Clone)]
@@ -24,13 +24,6 @@ impl Default for Camera {
     }
 }
 
-pub const OPENGL_TO_WGPU_MATRIX: glam::Mat4 = mat4(
-    vec4(1.0, 0.0, 0.0, 0.0),
-    vec4(0.0, 1.0, 0.0, 0.0),
-    vec4(0.0, 0.0, 0.5, 0.0),
-    vec4(0.0, 0.0, 0.5, 1.0),
-);
-
 impl Camera {
     pub fn build_view_proj_matrix(&self, bounds: Rectangle) -> glam::Mat4 {
         let aspect_ratio = bounds.width / bounds.height;
@@ -42,7 +35,7 @@ impl Camera {
             self.far,
         );
 
-        OPENGL_TO_WGPU_MATRIX * proj * view
+        proj * view
     }
 
     pub fn position(&self) -> glam::Vec4 {

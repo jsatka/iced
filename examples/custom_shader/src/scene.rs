@@ -9,7 +9,7 @@ use pipeline::cube::{self, Cube};
 
 use iced::mouse;
 use iced::time::Duration;
-use iced::widget::shader::{self, Viewport};
+use iced::widget::shader;
 use iced::{Color, Rectangle};
 
 use glam::Vec3;
@@ -135,14 +135,13 @@ impl shader::Primitive for Primitive {
         pipeline: &mut Pipeline,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        _bounds: &Rectangle,
-        viewport: &Viewport,
+        target: &shader::PrepareRegion,
     ) {
         // Upload data to GPU
         pipeline.update(
             device,
             queue,
-            viewport.physical_size(),
+            target.backing_extent(),
             &self.uniforms,
             self.cubes.len(),
             &self.cubes,
@@ -153,14 +152,14 @@ impl shader::Primitive for Primitive {
         &self,
         pipeline: &Pipeline,
         encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        clip_bounds: &Rectangle<u32>,
+        target_view: &wgpu::TextureView,
+        region: &shader::RenderRegion,
     ) {
         // Render primitive
         pipeline.render(
-            target,
+            target_view,
             encoder,
-            *clip_bounds,
+            region,
             self.cubes.len() as u32,
             self.show_depth_buffer,
         );

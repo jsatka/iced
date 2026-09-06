@@ -3,6 +3,7 @@
     html_logo_url = "https://raw.githubusercontent.com/iced-rs/iced/9ab6923e943f784985e9ef9ca28b10278297225d/docs/logo.svg"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![recursion_limit = "256"]
 pub use iced_renderer as renderer;
 pub use iced_renderer::core;
 pub use iced_renderer::graphics;
@@ -12,6 +13,7 @@ pub use core::widget::{Id, Void};
 mod action;
 mod column;
 mod mouse_area;
+mod opacity;
 mod pin;
 mod responsive;
 mod stack;
@@ -24,6 +26,8 @@ pub mod component;
 pub mod container;
 pub mod float;
 pub mod grid;
+#[cfg(feature = "wgpu")]
+pub mod isolated_layer;
 pub mod keyed;
 pub mod lazy;
 pub mod overlay;
@@ -66,10 +70,15 @@ pub use container::Container;
 pub use float::Float;
 #[doc(no_inline)]
 pub use grid::Grid;
+#[cfg(feature = "wgpu")]
+#[doc(no_inline)]
+pub use isolated_layer::IsolatedLayer;
 #[doc(no_inline)]
 pub use lazy::Lazy;
 #[doc(no_inline)]
 pub use mouse_area::MouseArea;
+#[doc(no_inline)]
+pub use opacity::Opacity;
 #[doc(no_inline)]
 pub use pane_grid::PaneGrid;
 #[doc(no_inline)]

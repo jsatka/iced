@@ -38,12 +38,12 @@ struct Output {
 
 @vertex
 fn vs_main(vertex: Vertex, cube: Cube) -> Output {
-     let cube_matrix = mat4x4<f32>(
-         cube.matrix_0,
-         cube.matrix_1,
-         cube.matrix_2,
-         cube.matrix_3,
-     );
+    let cube_matrix = mat4x4<f32>(
+        cube.matrix_0,
+        cube.matrix_1,
+        cube.matrix_2,
+        cube.matrix_3,
+    );
 
     let normal_matrix = mat3x3<f32>(
         cube.normal_matrix_0,

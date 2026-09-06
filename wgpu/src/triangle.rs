@@ -148,6 +148,10 @@ impl State {
         }
     }
 
+    pub fn prepared_layer_count(&self) -> usize {
+        self.prepare_layer
+    }
+
     pub fn prepare(
         &mut self,
         pipeline: &Pipeline,
@@ -155,15 +159,16 @@ impl State {
         belt: &mut wgpu::util::StagingBelt,
         encoder: &mut wgpu::CommandEncoder,
         items: &[Item],
-        scale: Transformation,
+        raster_transform: Transformation,
         target_size: Size<u32>,
     ) {
-        let projection =
-            if let Some((state, pipeline)) = self.msaa.as_mut().zip(pipeline.msaa.as_ref()) {
-                state.prepare(device, encoder, belt, pipeline, target_size) * scale
-            } else {
-                Transformation::orthographic(target_size.width, target_size.height) * scale
-            };
+        let projection = if let Some((state, pipeline)) =
+            self.msaa.as_mut().zip(pipeline.msaa.as_ref())
+        {
+            state.prepare(device, encoder, belt, pipeline, target_size) * raster_transform
+        } else {
+            Transformation::orthographic(target_size.width, target_size.height) * raster_transform
+        };
 
         for item in items {
             match item {
@@ -212,10 +217,11 @@ impl State {
         pipeline: &Pipeline,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
+        target_size: Size<u32>,
         start: usize,
         batch: &Batch,
         bounds: Rectangle,
-        screen_transformation: Transformation,
+        raster_transform: Transformation,
     ) -> usize {
         let mut layer_count = 0;
 
@@ -227,11 +233,7 @@ impl State {
                 let layer = &self.layers[start + layer_count];
                 layer_count += 1;
 
-                Some((
-                    layer,
-                    meshes.as_slice(),
-                    screen_transformation * *transformation,
-                ))
+                Some((layer, meshes.as_slice(), raster_transform * *transformation))
             }
             Item::Cached {
                 transformation,
@@ -242,7 +244,7 @@ impl State {
                 Some((
                     &upload.layer,
                     &upload.batch,
-                    screen_transformation * *transformation,
+                    raster_transform * *transformation,
                 ))
             }
         });
@@ -253,6 +255,7 @@ impl State {
             self.msaa.as_ref().zip(pipeline.msaa.as_ref()),
             &pipeline.solid,
             &pipeline.gradient,
+            target_size,
             bounds,
             items,
         );
@@ -262,6 +265,9 @@ impl State {
 
     pub fn trim(&mut self) {
         self.storage.trim();
+        if let Some(msaa) = &mut self.msaa {
+            msaa.trim();
+        }
 
         self.prepare_layer = 0;
     }
@@ -287,12 +293,13 @@ fn render<'a>(
     mut msaa: Option<(&msaa::State, &msaa::Pipeline)>,
     solid: &solid::Pipeline,
     gradient: &gradient::Pipeline,
+    target_size: Size<u32>,
     bounds: Rectangle,
     group: impl Iterator<Item = (&'a Layer, &'a [Mesh], Transformation)>,
 ) {
     {
-        let mut render_pass = if let Some((_state, pipeline)) = &mut msaa {
-            pipeline.render_pass(encoder)
+        let mut render_pass = if let Some((state, pipeline)) = &mut msaa {
+            state.render_pass(pipeline, encoder, target_size)
         } else {
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("iced_wgpu.triangle.render_pass"),
@@ -312,6 +319,15 @@ fn render<'a>(
             })
         };
 
+        render_pass.set_viewport(
+            0.0,
+            0.0,
+            target_size.width as f32,
+            target_size.height as f32,
+            0.0,
+            1.0,
+        );
+
         for (layer, meshes, transformation) in group {
             layer.render(
                 solid,
@@ -325,7 +341,7 @@ fn render<'a>(
     }
 
     if let Some((state, pipeline)) = msaa {
-        state.render(pipeline, encoder, target);
+        state.render(pipeline, encoder, target, target_size);
     }
 }
 

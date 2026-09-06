@@ -10,6 +10,8 @@ use crate::core::widget::operation::{self, Operation};
 use crate::core::window;
 use crate::core::{Element, Length, Size, Widget};
 use crate::float::{self, Float};
+#[cfg(feature = "wgpu")]
+use crate::isolated_layer::{AlphaMask, DropShadow, DualKawaseBlur, GaussianBlur, IsolatedLayer};
 use crate::keyed;
 use crate::lazy::Lazy;
 use crate::overlay;
@@ -26,12 +28,90 @@ use crate::toggler::{self, Toggler};
 use crate::tooltip::{self, Tooltip};
 use crate::transition::{self, Transition};
 use crate::vertical_slider::{self, VerticalSlider};
-use crate::{Column, Grid, MouseArea, Pin, Responsive, Row, Sensor, Space, Stack, Themer};
+use crate::{Column, Grid, MouseArea, Opacity, Pin, Responsive, Row, Sensor, Space, Stack, Themer};
 
 use std::borrow::Borrow;
 use std::ops::RangeInclusive;
 
 pub use crate::component::component;
+
+/// Captures `content` in an isolated layer.
+#[cfg(feature = "wgpu")]
+pub fn isolated_layer<'a, Message, Theme, Renderer>(
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+) -> IsolatedLayer<'a, Message, Theme, Renderer>
+where
+    Renderer: crate::renderer::wgpu::isolated_layer::Renderer,
+{
+    IsolatedLayer::new(content)
+}
+
+/// Applies uniform group opacity to `content`.
+pub fn opacity<'a, Message, Theme, Renderer>(
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+    opacity: f32,
+) -> Opacity<'a, Message, Theme, Renderer>
+where
+    Renderer: core::Renderer,
+{
+    Opacity::new(content, opacity)
+}
+
+/// Applies a Gaussian blur to `content`.
+///
+/// Supply [`GaussianBlur::new`] with an outer logical-pixel radius. The dense
+/// kernel grows with radius and display scale. Zero radius is an exact identity.
+#[cfg(feature = "wgpu")]
+pub fn blur_gaussian<'a, Message, Theme, Renderer>(
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+    settings: GaussianBlur,
+) -> IsolatedLayer<'a, Message, Theme, Renderer>
+where
+    Renderer: crate::renderer::wgpu::isolated_layer::Renderer,
+{
+    IsolatedLayer::with_effect(content, settings)
+}
+
+/// Applies a Dual Kawase blur to `content`.
+///
+/// A scalar radius uses depth 3. Supply
+/// `DualKawaseBlur::new(radius).pyramid_depth(depth)` to choose the depth.
+/// Keep depth fixed for radius animation. Zero radius is an exact identity.
+#[cfg(feature = "wgpu")]
+pub fn blur_dual_kawase<'a, Message, Theme, Renderer>(
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+    settings: impl Into<DualKawaseBlur>,
+) -> IsolatedLayer<'a, Message, Theme, Renderer>
+where
+    Renderer: crate::renderer::wgpu::isolated_layer::Renderer,
+{
+    IsolatedLayer::with_effect(content, settings.into())
+}
+
+/// Applies a drop shadow to `content`.
+#[cfg(feature = "wgpu")]
+pub fn drop_shadow<'a, Message, Theme, Renderer>(
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+    shadow: DropShadow,
+) -> IsolatedLayer<'a, Message, Theme, Renderer>
+where
+    Renderer: crate::renderer::wgpu::isolated_layer::Renderer,
+{
+    IsolatedLayer::with_effect(content, shadow)
+}
+
+/// Applies a generated alpha mask to `content`.
+#[cfg(feature = "wgpu")]
+pub fn alpha_mask<'a, Message, Theme, Renderer>(
+    content: impl Into<Element<'a, Message, Theme, Renderer>>,
+    mask: AlphaMask,
+) -> IsolatedLayer<'a, Message, Theme, Renderer>
+where
+    Renderer: crate::renderer::wgpu::isolated_layer::Renderer,
+{
+    IsolatedLayer::with_effect(content, mask)
+}
+
 pub use crate::table::table;
 
 /// Creates a [`Column`] with the given children.
